@@ -64,7 +64,7 @@ clean:
 		echo "Cleaning $$p..."; \
 		rm -f $$p/$$p.plugin; \
 	done
-	@rm -rf ado/*
+	@rm -rf ado/plus
 
 # Install: .plugin → ~/ado/plus/, .ado/.sthlp → ~/ado/plus/<letter>/
 install: all
@@ -91,28 +91,28 @@ install: all
 
 # Package: .plugin → ado/p/, .ado/.sthlp → ado/<letter>/
 dist: all
-	@echo "Packaging to ado/..."
-	@mkdir -p ado/p
+	@echo "Packaging to ado/plus/..."
+	@mkdir -p ado/plus
 	@for p in $(PLUGINS); do \
 		letter=$$(echo $$p | cut -c1); \
-		cp $$p/$$p.plugin ado/p/ 2>/dev/null || true; \
-		mkdir -p ado/$$letter; \
-		cp $$p/$$p.ado ado/$$letter/ 2>/dev/null || true; \
-		cp $$p/$$p.sthlp ado/$$letter/ 2>/dev/null || true; \
+		cp $$p/$$p.plugin ado/plus/ 2>/dev/null || true; \
+		mkdir -p ado/plus/$$letter; \
+		cp $$p/$$p.ado ado/plus/$$letter/ 2>/dev/null || true; \
+		cp $$p/$$p.sthlp ado/plus/$$letter/ 2>/dev/null || true; \
 		echo "  Packaged $$p"; \
 	done
 	@echo "Packaging single_ado files..."
 	@for f in $(SINGLE_ADO_FILES); do \
 		base=$$(basename $$f .ado); \
 		letter=$$(echo $$base | cut -c1); \
-		mkdir -p ado/$$letter; \
-		cp $$f ado/$$letter/ 2>/dev/null || true; \
+		mkdir -p ado/plus/$$letter; \
+		cp $$f ado/plus/$$letter/ 2>/dev/null || true; \
 		if [ -f $(SINGLE_ADO_DIR)/$$base.sthlp ]; then \
-			cp $(SINGLE_ADO_DIR)/$$base.sthlp ado/$$letter/ 2>/dev/null || true; \
+			cp $(SINGLE_ADO_DIR)/$$base.sthlp ado/plus/$$letter/ 2>/dev/null || true; \
 		fi; \
 		echo "  Packaged $$base"; \
 	done
-	@echo "Package complete: ado/ directory ready for distribution."
+	@echo "Package complete: ado/plus/ directory ready for distribution."
 
 help:
 	@echo "Stata Kernel Plugins Makefile"
