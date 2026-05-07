@@ -15,7 +15,11 @@
 COMMON_SRC = src/stplugin.c src/utils.c
 
 # Plugin subdirectories
-PLUGINS = kdensity2
+PLUGINS = kdensity2 nwreg
+
+# Standalone ado files (no C compilation needed)
+SINGLE_ADO_DIR = single_ado
+SINGLE_ADO_FILES = $(wildcard $(SINGLE_ADO_DIR)/*.ado)
 
 # Detect platform
 UNAME_S := $(shell uname -s)
@@ -72,6 +76,17 @@ install: all
 		cp $$p/$$p.sthlp ~/ado/plus/$$letter/ 2>/dev/null || mkdir -p ~/ado/plus/$$letter && cp $$p/$$p.sthlp ~/ado/plus/$$letter/ 2>/dev/null || true; \
 		echo "  Installed $$p"; \
 	done
+	@echo "Installing single_ado files..."
+	@for f in $(SINGLE_ADO_FILES); do \
+		base=$$(basename $$f .ado); \
+		letter=$$(echo $$base | cut -c1); \
+		mkdir -p ~/ado/plus/$$letter; \
+		cp $$f ~/ado/plus/$$letter/ 2>/dev/null || true; \
+		if [ -f $(SINGLE_ADO_DIR)/$$base.sthlp ]; then \
+			cp $(SINGLE_ADO_DIR)/$$base.sthlp ~/ado/plus/$$letter/ 2>/dev/null || true; \
+		fi; \
+		echo "  Installed $$base"; \
+	done
 	@echo "Installation complete."
 
 # Package: .plugin → ado/p/, .ado/.sthlp → ado/<letter>/
@@ -86,6 +101,17 @@ dist: all
 		cp $$p/$$p.sthlp ado/$$letter/ 2>/dev/null || true; \
 		echo "  Packaged $$p"; \
 	done
+	@echo "Packaging single_ado files..."
+	@for f in $(SINGLE_ADO_FILES); do \
+		base=$$(basename $$f .ado); \
+		letter=$$(echo $$base | cut -c1); \
+		mkdir -p ado/$$letter; \
+		cp $$f ado/$$letter/ 2>/dev/null || true; \
+		if [ -f $(SINGLE_ADO_DIR)/$$base.sthlp ]; then \
+			cp $(SINGLE_ADO_DIR)/$$base.sthlp ado/$$letter/ 2>/dev/null || true; \
+		fi; \
+		echo "  Packaged $$base"; \
+	done
 	@echo "Package complete: ado/ directory ready for distribution."
 
 help:
@@ -95,8 +121,8 @@ help:
 	@echo "  all          - Build all plugins (default)"
 	@echo "  kdensity2    - Build kdensity2 plugin only"
 	@echo "  clean        - Remove all built files"
-	@echo "  install      - Install all plugins to ~/ado/plus/"
-	@echo "  dist         - Package plugins to ado/ directory"
+	@echo "  install      - Install all plugins (and single_ado) to ~/ado/plus/"
+	@echo "  dist         - Package plugins (and single_ado) to ado/ directory"
 	@echo "  help         - Show this help"
 	@echo ""
 	@echo "Project layout:"
@@ -105,13 +131,20 @@ help:
 	@echo "    │     ├── stplugin.h, utils.h"
 	@echo "    │     └── stplugin.c, utils.c"
 	@echo "    ├── Makefile"
-	@echo "    └── kdensity2/"
-	@echo "          ├── kdensity2.c"
-	@echo "          └── kdensity2.ado"
+	@echo "    ├── kdensity2/"
+	@echo "    │     ├── kdensity2.c / kdensity2.ado"
+	@echo "    ├── nwreg/"
+	@echo "    │     ├── nwreg.c / nwreg.ado"
+	@echo "    └── single_ado/"
+	@echo "          ├── bprecall.ado"
+	@echo "          ├── countdistinct.ado"
+	@echo "          ├── gen_init_var.ado"
+	@echo "          ├── gencatutility.ado"
+	@echo "          └── labelvalidsample.ado"
 	@echo ""
 	@echo "To add a new plugin:"
-	@echo "  1. mkdir kregress && create kregress.c / kregress.ado"
-	@echo "  2. Add 'kregress' to PLUGINS in this Makefile"
-	@echo "  3. make kregress"
+	@echo "  1. mkdir myplugin && create myplugin.c / myplugin.ado"
+	@echo "  2. Add 'myplugin' to PLUGINS in this Makefile"
+	@echo "  3. make myplugin"
 	@echo ""
 	@echo "Platform: $(UNAME_S)"
