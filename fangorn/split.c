@@ -201,11 +201,13 @@ static void find_best_split_feature(
 
 void find_best_split(Dataset *data, const int *sample_idx, int n_samples,
                      double parent_impurity, const TreeParams *params,
-                     SplitResult *result)
+                     SplitResult *result, lcg_state_t *rng)
 {
     int feat, k, n_sorted;
     int *in_node;
     int *node_sorted;
+    int *feat_subset = NULL;
+    int n_feat_eval;
 
     result->found             = 0;
     result->impurity_decrease = params->min_impurity_decrease;
@@ -220,16 +222,31 @@ void find_best_split(Dataset *data, const int *sample_idx, int n_samples,
 
     for (k = 0; k < n_samples; k++) in_node[sample_idx[k]] = 1;
 
-    for (feat = 0; feat < data->n_features; feat++) {
+    if (rng && params->mtry > 0 && params->mtry < data->n_features) {
+        feat_subset = (int *)malloc((size_t)params->mtry * sizeof(int));
+        if (feat_subset) {
+            sample_features(data->n_features, params->mtry, feat_subset, rng);
+            n_feat_eval = params->mtry;
+        } else {
+            n_feat_eval = data->n_features;
+        }
+    } else {
+        n_feat_eval = data->n_features;
+    }
+
+    for (k = 0; k < n_feat_eval; k++) {
+        int fidx;
+        feat = feat_subset ? feat_subset[k] : k;
         n_sorted = 0;
-        for (k = 0; k < data->n_obs; k++) {
-            int orig = data->sorted_indices[feat][k];
+        for (fidx = 0; fidx < data->n_obs; fidx++) {
+            int orig = data->sorted_indices[feat][fidx];
             if (in_node[orig]) node_sorted[n_sorted++] = orig;
         }
         find_best_split_feature(data, feat, node_sorted, n_sorted,
                                 parent_impurity, params, result);
     }
 
+    free(feat_subset);
     free(in_node);
     free(node_sorted);
 }

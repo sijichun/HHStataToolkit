@@ -27,6 +27,35 @@ unsigned int lcg_next(lcg_state_t *state);
 double lcg_uniform(lcg_state_t *state);
 
 /* ============================================================================
+ * Bootstrap Sampling
+ * ============================================================================ */
+
+typedef struct {
+    int *indices;      /* bootstrap sample indices (length = n_samples) */
+    int n_samples;     /* = n_total (same size as original) */
+    int *oob_mask;     /* 1 if observation is OOB, length = n_total */
+    int n_oob;         /* count of OOB observations */
+} BootstrapSample;
+
+/*
+ * Generate a bootstrap sample of size n_total with replacement.
+ * seed: per-tree seed (will use seed + tree_index in caller)
+ * bs: output structure (caller must call free_bootstrap afterwards)
+ * Returns 0 on success, -1 on allocation failure.
+ */
+int bootstrap_sample(int n_total, unsigned int seed, BootstrapSample *bs);
+
+/* Free memory allocated by bootstrap_sample */
+void free_bootstrap(BootstrapSample *bs);
+
+/*
+ * Sample mtry unique features from [0, n_features-1] without replacement.
+ * out_features must be pre-allocated with length >= mtry.
+ * rng: LCG state (will be modified)
+ */
+void sample_features(int n_features, int mtry, int *out_features, lcg_state_t *rng);
+
+/* ============================================================================
  * Argsort
  * ============================================================================ */
 

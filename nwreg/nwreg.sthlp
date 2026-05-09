@@ -27,6 +27,8 @@
 {synopt :{opt folds(#)}}CV folds (used with {cmd:bw(cv)}); default is 10{p_end}
 {synopt :{opt grids(#)}}CV grid candidates per side; default is 10{p_end}
 {synopt :{opt gen:erate(newvar)}}output variable; default is {cmd:nwreg}{p_end}
+{synopt :{opt se(newvar)}}standard error variable; if specified, computes a heteroskedasticity-robust local standard error for each prediction{p_end}
+{synopt :{opt setype(#)}}SE computation method: 0=full-sample, 1=leave-one-out, 2=leverage-corrected (default){p_end}
 {synopt :{opt if(exp)}}observations to include (use parentheses){p_end}
 {synoptline}
 {p2colreset}{...}
@@ -67,6 +69,18 @@ log-spaced with step 0.05.
 
 {phang}{opt generate(newvar)}: output variable name.
 
+{phang}{opt se(newvar)}: if specified, computes a heteroskedasticity-robust
+local standard error for each prediction and stores it in {it:newvar}.  The
+standard error is based on local weighted squared residuals from the training
+set and is computed for both target=0 (training) and target=1 (test)
+observations.
+
+{phang}{opt se_type(#)}: method for computing residuals used in the standard
+error formula.  {cmd:0} uses full-sample fitted values (fastest, slight finite-
+sample downward bias).  {cmd:1} uses leave-one-out fitted values (most accurate,
+about 2x compute).  {cmd:2} applies a leverage correction (HC3-style) to full-
+sample residuals (recommended default: nearly unbiased with minimal overhead).
+
 {phang}{opt if(exp)}: use {cmd:if(exp)} syntax (not Stata qualifier) to avoid
 a Stata 18 parsing bug.
 
@@ -79,6 +93,10 @@ a Stata 18 parsing bug.
 {phang2}{cmd:. nwreg y x, generate(yhat) if(flag==1)}{p_end}
 {phang2}{cmd:. nwreg y x, group(g) mincount(50)}{p_end}
 {phang2}{cmd:. nwreg y x1 x2, group(g1 g2) target(t)}{p_end}
+{phang2}{cmd:. nwreg y x, generate(yhat) se(yhat_se)}{p_end}
+{phang2}{cmd:. nwreg y x, target(t) generate(yhat) se(yhat_se)}{p_end}
+{phang2}{cmd:. nwreg y x, generate(yhat) se(yhat_se) se_type(1)}{p_end}
+{phang2}{cmd:. nwreg y x, generate(yhat) se(yhat_se) se_type(0)}{p_end}
 
 {marker also_see}{...}
 {title:Also see}

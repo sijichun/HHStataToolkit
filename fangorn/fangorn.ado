@@ -13,7 +13,8 @@ program define fangorn, rclass
      * Phase 1: single decision tree (ntree=1 only).
      * Phase 1.5: added relimpdec() and maxleafnodes() regularization.
      * Phase 1.6: added entcvdepth() for cross-validated depth selection.
-     * Phase 2 will add mtry, importance; Phase 3 will add ntiles, strategy.
+     * Phase 2: added random forest (ntree>1), bootstrap, OOB, mtry.
+     * Phase 3 will add ntiles, strategy.
      */
     
     syntax varlist(min=2 numeric) ///
@@ -29,6 +30,7 @@ program define fangorn, rclass
            CRITerion(string) ///
            SEED(integer 12345) ///
            NCLasses(integer -1) ///
+           MTRY(integer -1) ///
            GENerate(string) ///
            PREDname(string) ///
            TARget(varname numeric) ///
@@ -54,7 +56,8 @@ program define fangorn, rclass
         drop `tmp'
     }
     quietly count if `touse'
-    if r(N) < 2 {
+    local nobs = r(N)
+    if `nobs' < 2 {
         display as error "Need at least 2 observations"
         exit 2001
     }
@@ -196,6 +199,7 @@ program define fangorn, rclass
     local plugin_args "`plugin_args' criterion(`criterion_opt')"
 
     local plugin_args "`plugin_args' seed(`seed')"
+    local plugin_args "`plugin_args' mtry(`mtry')"
     local plugin_args "`plugin_args' nclasses(`nclasses_opt')"
     local plugin_args "`plugin_args' nfeatures(`nindep')"
     local plugin_args "`plugin_args' ntarget(`ntarget')"
@@ -216,6 +220,14 @@ program define fangorn, rclass
     return scalar maxdepth = `maxdepth'
     return local  type     "`type_opt'"
     
+    if `ntree' > 1 {
+        capture scalar oob_err = __fangorn_oob_err
+        if !_rc {
+            return scalar oob_error = scalar(oob_err)
+            scalar drop __fangorn_oob_err
+        }
+    }
+    
     /* Display results */
     display as text _n "Random forest / decision tree"
     display as text "{hline 40}"
@@ -230,11 +242,19 @@ program define fangorn, rclass
     }
     display as text "Type:          " as result "`type_opt'"
     display as text "Criterion:     " as result "`criterion_opt'"
-    display as text "Trees:         " as result r(ntree)
-    display as text "Max depth:     " as result r(maxdepth)
-    display as text "Observations:  " as result r(N)
+    display as text "Trees:         " as result `ntree'
+    display as text "Max depth:     " as result `maxdepth'
+    if `ntree' > 1 {
+        display as text "Mtry:          " as result `mtry'
+        if r(oob_error) != . {
+            display as text "OOB error:     " as result %9.4f r(oob_error)
+        }
+    }
+    display as text "Observations:  " as result `nobs'
     display as text "Prediction var:" as result " `pred_var'"
-    display as text "Leaf ID var:   " as result " `leaf_var'"
+    if `ntree' == 1 {
+        display as text "Leaf ID var:   " as result " `leaf_var'"
+    }
     if "`mermaid'" != "" {
         display as text "Mermaid file:  " as result " `mermaid'"
     }
@@ -242,6 +262,11 @@ program define fangorn, rclass
     
     /* Label output variables */
     label variable `pred_var' "fangorn prediction"
-    label variable `leaf_var' "fangorn leaf ID"
+    if `ntree' == 1 {
+        label variable `leaf_var' "fangorn leaf ID"
+    }
+    else {
+        label variable `leaf_var' "fangorn forest placeholder"
+    }
     
 end

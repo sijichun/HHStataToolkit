@@ -51,9 +51,6 @@ static double nw_eval_mv(double *x, double **train_x, double *train_y,
     double num = 0.0, den = 0.0;
     int i;
 
-#ifdef _OPENMP
-#pragma omp parallel for reduction(+:num, den)
-#endif
     for (i = 0; i < n_train; i++) {
         int d;
         double u[MAX_DIM];
@@ -65,6 +62,176 @@ static double nw_eval_mv(double *x, double **train_x, double *train_y,
     }
 
     if (den == 0.0) return SV_missval;
+    return num / den;
+}
+
+/* ============================================================================
+ * Standard Error Calculation
+ * ============================================================================
+ *
+ * Three se_type options:
+ *   0 = full-sample residuals (fast, slight downward bias in finite samples)
+ *   1 = leave-one-out residuals (unbiased, 2x compute)
+ *   2 = leverage-corrected residuals (HC3-style, almost no extra compute)
+ *
+ * Core formula (heteroskedasticity-robust local variance):
+ *   SE(x)^2 = sum_i w_i^2 * e_i^2 / (sum_i w_i)^2
+ * where w_i = K_h(x - X_i) and e_i is the chosen residual type.
+ */
+
+static double kernel_at_zero(int kernel_type)
+{
+    switch (kernel_type) {
+        case KERNEL_GAUSSIAN:     return 1.0 / sqrt(2.0 * M_PI);
+        case KERNEL_EPANECHNIKOV: return 0.75;
+        case KERNEL_UNIFORM:      return 0.5;
+        case KERNEL_TRIWEIGHT:    return 35.0 / 32.0;
+        case KERNEL_COSINE:       return M_PI / 4.0;
+        default:                  return 1.0 / sqrt(2.0 * M_PI);
+    }
+}
+
+static void compute_se_residuals_1d(double *train_x, double *train_y,
+                                     int n_train, double h, int kernel_type,
+                                     int se_type, double *se_resid)
+{
+    kernel_1d_func K = get_kernel_1d(kernel_type);
+    double K0 = kernel_at_zero(kernel_type);
+    int i;
+
+    for (i = 0; i < n_train; i++) {
+        double num = 0.0, den = 0.0;
+        int j;
+        for (j = 0; j < n_train; j++) {
+            double w = K((train_x[i] - train_x[j]) / h);
+            num += w * train_y[j];
+            den += w;
+        }
+        if (den == 0.0) {
+            se_resid[i] = 0.0;
+            continue;
+        }
+        double pred = num / den;
+        double raw_resid = train_y[i] - pred;
+
+        if (se_type == 0) {
+            se_resid[i] = raw_resid;
+        } else if (se_type == 1) {
+            double den_loo = den - K0;
+            if (den_loo <= 0.0) {
+                se_resid[i] = raw_resid;
+            } else {
+                double num_loo = num - K0 * train_y[i];
+                double pred_loo = num_loo / den_loo;
+                se_resid[i] = train_y[i] - pred_loo;
+            }
+        } else {
+            double leverage = K0 / den;
+            double adj = 1.0 - leverage;
+            if (adj > 1e-12) {
+                se_resid[i] = raw_resid / adj;
+            } else {
+                se_resid[i] = raw_resid;
+            }
+        }
+    }
+}
+
+static void compute_se_residuals_mv(double **train_x, double *train_y,
+                                     int n_train, int dim, double *h,
+                                     int kernel_type, int se_type,
+                                     double *se_resid)
+{
+    double K0 = kernel_at_zero(kernel_type);
+    double K0_prod = pow(K0, dim);
+    int i;
+
+    for (i = 0; i < n_train; i++) {
+        double num = 0.0, den = 0.0;
+        int j;
+        for (j = 0; j < n_train; j++) {
+            int d;
+            double u[MAX_DIM];
+            for (d = 0; d < dim; d++)
+                u[d] = (train_x[d][i] - train_x[d][j]) / h[d];
+            double w = kernel_product(u, dim, kernel_type);
+            num += w * train_y[j];
+            den += w;
+        }
+        if (den == 0.0) {
+            se_resid[i] = 0.0;
+            continue;
+        }
+        double pred = num / den;
+        double raw_resid = train_y[i] - pred;
+
+        if (se_type == 0) {
+            se_resid[i] = raw_resid;
+        } else if (se_type == 1) {
+            double den_loo = den - K0_prod;
+            if (den_loo <= 0.0) {
+                se_resid[i] = raw_resid;
+            } else {
+                double num_loo = num - K0_prod * train_y[i];
+                double pred_loo = num_loo / den_loo;
+                se_resid[i] = train_y[i] - pred_loo;
+            }
+        } else {
+            double leverage = K0_prod / den;
+            double adj = 1.0 - leverage;
+            if (adj > 1e-12) {
+                se_resid[i] = raw_resid / adj;
+            } else {
+                se_resid[i] = raw_resid;
+            }
+        }
+    }
+}
+
+static double nw_eval_1d_with_se(double x, double *train_x, double *train_y,
+                                  double *se_resid, int n_train, double h,
+                                  int kernel_type, double *se)
+{
+    kernel_1d_func K = get_kernel_1d(kernel_type);
+    double num = 0.0, den = 0.0, se_num = 0.0;
+    int i;
+    for (i = 0; i < n_train; i++) {
+        double w = K((x - train_x[i]) / h);
+        num += w * train_y[i];
+        den += w;
+        se_num += w * w * se_resid[i] * se_resid[i];
+    }
+    if (den == 0.0) {
+        *se = SV_missval;
+        return SV_missval;
+    }
+    *se = sqrt(se_num) / den;
+    return num / den;
+}
+
+static double nw_eval_mv_with_se(double *x, double **train_x, double *train_y,
+                                  double *se_resid, int n_train, int dim,
+                                  double *h, int kernel_type, double *se)
+{
+    double num = 0.0, den = 0.0, se_num = 0.0;
+    int i;
+
+    for (i = 0; i < n_train; i++) {
+        int d;
+        double u[MAX_DIM];
+        for (d = 0; d < dim; d++)
+            u[d] = (x[d] - train_x[d][i]) / h[d];
+        double w = kernel_product(u, dim, kernel_type);
+        num += w * train_y[i];
+        den += w;
+        se_num += w * w * se_resid[i] * se_resid[i];
+    }
+
+    if (den == 0.0) {
+        *se = SV_missval;
+        return SV_missval;
+    }
+    *se = sqrt(se_num) / den;
     return num / den;
 }
 
@@ -357,9 +524,11 @@ STDLL stata_call(int argc, char *argv[])
     int cv_folds       = 10;
     int cv_grids       = 10;
 
-    int nreg    = -1;   /* number of regressors (independent variables) */
-    int ntarget = 0;    /* 0 or 1 */
+    int nreg    = -1;
+    int ntarget = 0;
     int ngroup  = 0;
+    int nse     = 0;
+    int se_type = 2;
     int minobs  = 0;
 
     /* ---- Parse argv ---- */
@@ -394,6 +563,13 @@ STDLL stata_call(int argc, char *argv[])
         else if (extract_option_value(arg, "ngroup", buf, sizeof(buf))) {
             ngroup = atoi(buf);
         }
+        else if (extract_option_value(arg, "nse", buf, sizeof(buf))) {
+            nse = atoi(buf);
+        }
+        else if (extract_option_value(arg, "se_type", buf, sizeof(buf))) {
+            se_type = atoi(buf);
+            if (se_type < 0 || se_type > 2) se_type = 2;
+        }
         else if (extract_option_value(arg, "minobs", buf, sizeof(buf))) {
             minobs = atoi(buf);
             if (minobs < 0) minobs = 0;
@@ -426,13 +602,15 @@ STDLL stata_call(int argc, char *argv[])
      *   nreg+2 .. nreg+1+ntarget          target variable (0=train,1=test)
      *   nreg+2+ntarget .. nreg+1+ntarget+ngroup  group variables
      *   nreg+2+ntarget+ngroup              output (predicted y)
-     *   nreg+3+ntarget+ngroup              touse
+     *   nreg+3+ntarget+ngroup              SE output (if nse>0)
+     *   nreg+3+ntarget+ngroup+nse          touse
      */
     int idx_y            = nreg + 1;
     int idx_target_start = nreg + 2;                          /* only used if ntarget > 0 */
     int idx_group_start  = nreg + 2 + ntarget;               /* first group var */
     int idx_result       = nreg + 2 + ntarget + ngroup;
-    int idx_touse        = nreg + 3 + ntarget + ngroup;
+    int idx_se           = (nse > 0) ? (nreg + 3 + ntarget + ngroup) : -1;
+    int idx_touse        = nreg + 3 + ntarget + ngroup + nse;
 
     if (n_obs < 2) {
         SF_error("Error: Need at least 2 observations\n");
@@ -445,10 +623,12 @@ STDLL stata_call(int argc, char *argv[])
     double *target    = (ntarget > 0) ? alloc_double_array(n_obs) : NULL;
     double **group    = (ngroup  > 0) ? alloc_double_matrix(ngroup, n_obs) : NULL;
     double *result    = alloc_double_array(n_obs);
+    double *se_result = (nse > 0) ? alloc_double_array(n_obs) : NULL;
     int    *in_if     = (int*)malloc(n_obs * sizeof(int));
 
     if (!reg_data || !y_data || !result || !in_if ||
-        (ntarget > 0 && !target) || (ngroup > 0 && !group)) {
+        (ntarget > 0 && !target) || (ngroup > 0 && !group) ||
+        (nse > 0 && !se_result)) {
         SF_error("Error: Memory allocation failed\n");
         free(in_if);
         free_matrix(reg_data, dim);
@@ -456,12 +636,16 @@ STDLL stata_call(int argc, char *argv[])
         free(target);
         if (group) free_matrix(group, ngroup);
         free(result);
+        free(se_result);
         return 1;
     }
 
-    /* ---- Initialise result to Stata missing ---- */
+    /* ---- Initialise result and SE to Stata missing ---- */
     int j;
-    for (j = 0; j < n_obs; j++) result[j] = SV_missval;
+    for (j = 0; j < n_obs; j++) {
+        result[j] = SV_missval;
+        if (se_result) se_result[j] = SV_missval;
+    }
 
     /* ---- Read touse ---- */
     int n_eff = 0;
@@ -479,6 +663,7 @@ STDLL stata_call(int argc, char *argv[])
         free(target);
         if (group) free_matrix(group, ngroup);
         free(result);
+        free(se_result);
         return 1;
     }
 
@@ -583,26 +768,73 @@ STDLL stata_call(int argc, char *argv[])
                            bandwidth_rule, manual_h,
                            cv_folds, cv_grids, kernel_type, h);
 
-            /* Evaluate NW estimator for ALL obs in this group */
+            /* ---- Compute standard errors (if requested) ---- */
+            if (nse > 0) {
+                double *se_resid = alloc_double_array(n_train_g);
+                if (!se_resid) {
+                    free(h);
+                    free_matrix(train_x, dim);
+                    free(train_y);
+                    continue;
+                }
+                if (dim == 1) {
+                    compute_se_residuals_1d(train_x[0], train_y, n_train_g,
+                                             h[0], kernel_type, se_type,
+                                             se_resid);
+                } else {
+                    compute_se_residuals_mv(train_x, train_y, n_train_g,
+                                             dim, h, kernel_type, se_type,
+                                             se_resid);
+                }
+
+                for (j = 0; j < n_obs; j++) {
+                    if (in_if[j] &&
+                        match_group_combo(group, ngroup, j, ug->values[i])) {
+                        if (dim == 1) {
+                            result[j] = nw_eval_1d_with_se(reg_data[0][j],
+                                                            train_x[0], train_y,
+                                                            se_resid,
+                                                            n_train_g, h[0],
+                                                            kernel_type,
+                                                            &se_result[j]);
+                        } else {
+                            double *x = (double*)malloc(dim * sizeof(double));
+                            if (x) {
+                                int d;
+                                for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
+                                result[j] = nw_eval_mv_with_se(x, train_x, train_y,
+                                                                se_resid,
+                                                                n_train_g, dim, h,
+                                                                kernel_type,
+                                                                &se_result[j]);
+                                free(x);
+                            }
+                        }
+                    }
+                }
+                free(se_resid);
+            } else {
+                /* Evaluate NW estimator for ALL obs in this group (no SE) */
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
-            for (j = 0; j < n_obs; j++) {
-                if (in_if[j] &&
-                    match_group_combo(group, ngroup, j, ug->values[i])) {
-                    if (dim == 1) {
-                        result[j] = nw_eval_1d(reg_data[0][j],
-                                               train_x[0], train_y,
-                                               n_train_g, h[0], kernel_type);
-                    } else {
-                        double *x = (double*)malloc(dim * sizeof(double));
-                        if (x) {
-                            int d;
-                            for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
-                            result[j] = nw_eval_mv(x, train_x, train_y,
-                                                    n_train_g, dim, h,
-                                                    kernel_type);
-                            free(x);
+                for (j = 0; j < n_obs; j++) {
+                    if (in_if[j] &&
+                        match_group_combo(group, ngroup, j, ug->values[i])) {
+                        if (dim == 1) {
+                            result[j] = nw_eval_1d(reg_data[0][j],
+                                                   train_x[0], train_y,
+                                                   n_train_g, h[0], kernel_type);
+                        } else {
+                            double *x = (double*)malloc(dim * sizeof(double));
+                            if (x) {
+                                int d;
+                                for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
+                                result[j] = nw_eval_mv(x, train_x, train_y,
+                                                        n_train_g, dim, h,
+                                                        kernel_type);
+                                free(x);
+                            }
                         }
                     }
                 }
@@ -675,24 +907,76 @@ STDLL stata_call(int argc, char *argv[])
                        bandwidth_rule, manual_h,
                        cv_folds, cv_grids, kernel_type, h);
 
-        /* Evaluate NW estimator for ALL in-sample obs */
+        /* ---- Compute standard errors (if requested) ---- */
+        if (nse > 0) {
+            double *se_resid = alloc_double_array(n_train);
+            if (!se_resid) {
+                free(h);
+                free_matrix(train_x, dim);
+                free(train_y);
+                free(in_if);
+                free_matrix(reg_data, dim);
+                free(y_data);
+                free(target);
+                free(result);
+                free(se_result);
+                return 1;
+            }
+            if (dim == 1) {
+                compute_se_residuals_1d(train_x[0], train_y, n_train,
+                                         h[0], kernel_type, se_type,
+                                         se_resid);
+            } else {
+                compute_se_residuals_mv(train_x, train_y, n_train,
+                                         dim, h, kernel_type, se_type,
+                                         se_resid);
+            }
+
+            for (j = 0; j < n_obs; j++) {
+                if (in_if[j]) {
+                    if (dim == 1) {
+                        result[j] = nw_eval_1d_with_se(reg_data[0][j],
+                                                        train_x[0], train_y,
+                                                        se_resid,
+                                                        n_train, h[0],
+                                                        kernel_type,
+                                                        &se_result[j]);
+                    } else {
+                        double *x = (double*)malloc(dim * sizeof(double));
+                        if (x) {
+                            int d;
+                            for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
+                            result[j] = nw_eval_mv_with_se(x, train_x, train_y,
+                                                            se_resid,
+                                                            n_train, dim, h,
+                                                            kernel_type,
+                                                            &se_result[j]);
+                            free(x);
+                        }
+                    }
+                }
+            }
+            free(se_resid);
+        } else {
+            /* Evaluate NW estimator for ALL in-sample obs (no SE) */
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
-        for (j = 0; j < n_obs; j++) {
-            if (in_if[j]) {
-                if (dim == 1) {
-                    result[j] = nw_eval_1d(reg_data[0][j],
-                                            train_x[0], train_y,
-                                            n_train, h[0], kernel_type);
-                } else {
-                    double *x = (double*)malloc(dim * sizeof(double));
-                    if (x) {
-                        int d;
-                        for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
-                        result[j] = nw_eval_mv(x, train_x, train_y,
-                                                n_train, dim, h, kernel_type);
-                        free(x);
+            for (j = 0; j < n_obs; j++) {
+                if (in_if[j]) {
+                    if (dim == 1) {
+                        result[j] = nw_eval_1d(reg_data[0][j],
+                                                train_x[0], train_y,
+                                                n_train, h[0], kernel_type);
+                    } else {
+                        double *x = (double*)malloc(dim * sizeof(double));
+                        if (x) {
+                            int d;
+                            for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
+                            result[j] = nw_eval_mv(x, train_x, train_y,
+                                                    n_train, dim, h, kernel_type);
+                            free(x);
+                        }
                     }
                 }
             }
@@ -707,6 +991,9 @@ STDLL stata_call(int argc, char *argv[])
     for (j = 1; j <= n_obs; j++) {
         if (in_if[j - 1]) {
             SF_vstore(idx_result, j, result[j - 1]);
+            if (nse > 0) {
+                SF_vstore(idx_se, j, se_result[j - 1]);
+            }
         }
     }
 
@@ -715,6 +1002,11 @@ STDLL stata_call(int argc, char *argv[])
     stata_printf("  Regressors: %d\n", nreg);
     stata_printf("  Observations: %ld\n", (long)n_obs);
     stata_printf("  Kernel: %s\n", get_kernel_name(kernel_type));
+    if (nse > 0) {
+        const char *se_name = (se_type == 1) ? "leave-one-out" :
+                               (se_type == 2) ? "leverage-corrected" : "full-sample";
+        stata_printf("  Standard errors: %s\n", se_name);
+    }
     if (ngroup > 0) {
         ST_double ng;
         SF_scal_use("nwreg_ngroups", &ng);
@@ -729,6 +1021,7 @@ STDLL stata_call(int argc, char *argv[])
     free(target);
     if (group) free_matrix(group, ngroup);
     free(result);
+    free(se_result);
 
     return 0;
 }

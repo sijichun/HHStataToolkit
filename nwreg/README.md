@@ -104,6 +104,45 @@ The grid search proceeds as follows:
 3. For MV: compute the geometric mean $\bar{h} = \exp(\frac{1}{D}\sum \log h_d)$, generate log grid around $\bar{h}$, and scale all bandwidths proportionally
 4. Evaluate $\text{CV}(h_j)$ for each candidate and select the maximizer
 
+#### Standard Error Estimation
+
+When `se(varname)` is specified, the plugin computes a heteroskedasticity-robust local standard error for each prediction.  The formula is:
+
+$$
+\widehat{SE}(\hat{m}(x)) = \frac{\sqrt{\sum_{i=1}^{n_{\text{train}}} K_h(x - X_i)^2 \cdot \tilde{\epsilon}_i^2}}{\sum_{i=1}^{n_{\text{train}}} K_h(x - X_i)}
+$$
+
+where $\tilde{\epsilon}_i$ is a bias-corrected residual at training point $X_i$.  Three methods for computing $\tilde{\epsilon}_i$ are available via the `se_type()` option:
+
+| `se_type` | Method | Bias | Speed |
+|-----------|--------|------|-------|
+| 0 | Full-sample residual: $\tilde{\epsilon}_i = Y_i - \hat{m}(X_i)$ | Slight downward bias | Fastest |
+| 1 | Leave-one-out residual: $\tilde{\epsilon}_i = Y_i - \hat{m}_{-i}(X_i)$ | Unbiased | ~2x |
+| 2 | Leverage-corrected residual: $\tilde{\epsilon}_i = (Y_i - \hat{m}(X_i)) / (1 - L_{ii})$ | Nearly unbiased | Minimal overhead |
+
+**Leverage correction** (default, `se_type=2`):
+The leverage of observation $i$ in NW regression is
+$$L_{ii} = \frac{K(0)}{\sum_{j=1}^{n_{\text{train}}} K_h(X_i - X_j)}$$
+for 1D, and $L_{ii} = K(0)^{\dim} / \sum_j w_j$ for multivariate.  Dividing by $(1 - L_{ii})$ corrects the well-known downward bias from using in-sample fitted values (analogous to the HC3 correction in linear regression; MacKinnon & White, 1985).
+
+**Leave-one-out** (`se_type=1`):
+The leave-one-out fitted value is computed efficiently without re-running the full NW estimator:
+$$\hat{m}_{-i}(X_i) = \frac{\sum_{j \neq i} K_h(X_i - X_j) Y_j}{\sum_{j \neq i} K_h(X_i - X_j)} = \frac{\text{num} - K(0) \cdot Y_i}{\text{den} - K(0)}$$
+where `num` and `den` are the full-sample numerator and denominator.  This is the most accurate finite-sample method (Fan & Gijbels, 1996, §4.2).
+
+**Key properties**:
+- The standard error is computed for **all** observations that receive predictions, including both `target=0` (training) and `target=1` (test) observations.
+- Residuals are computed on the training set only; the same residual vector is used for all evaluation points within a group.
+- The estimator is locally weighted: observations closer to the evaluation point $x$ contribute more to the variance estimate.
+- It is robust to heteroskedasticity because it uses squared residuals rather than assuming a constant error variance.
+
+**Computation steps** (per group, if grouping is used):
+1. Fit the NW estimator on the training data and compute bandwidth $h$.
+2. Compute adjusted residuals $\tilde{\epsilon}_i$ for each training point using the chosen `se_type`.
+3. For every observation $j$ in the group (training or test), evaluate:
+   - Prediction $\hat{m}(x_j)$ via the usual NW formula.
+   - Standard error using the adjusted residual vector from Step 2.
+
 ---
 
 ## C Code Architecture
@@ -184,6 +223,93 @@ static double nw_eval_mv(double *x, double **train_x, double *train_y,
 **OpenMP**: The training loop is parallelized with `#pragma omp parallel for reduction(+:num, den)`.
 
 **Complexity**: $O(n_{\text{train}} \cdot \dim)$ per evaluation point.
+
+---
+
+##### `nw_eval_1d_with_se`
+
+```c
+static double nw_eval_1d_with_se(double x, double *train_x, double *train_y,
+                                  double *se_resid, int n_train, double h,
+                                  int kernel_type, double *se)
+```
+
+**Purpose**: Evaluate the NW conditional mean and its heteroskedasticity-robust standard error at a single 1D point $x$.
+
+**Parameters**:
+- `x`: evaluation point (scalar regressor value)
+- `train_x`: flat array of training regressor values
+- `train_y`: flat array of training response values
+- `se_resid`: pre-computed adjusted residuals $\tilde{\epsilon}_i$ (length `n_train`); computed by `compute_se_residuals_1d`
+- `n_train`: number of training observations
+- `h`: bandwidth
+- `kernel_type`: kernel function selector
+- `se`: output pointer for the standard error
+
+**Algorithm**:
+1. For each training observation $i$:
+   - Compute weight $w_i = K((x - X_i) / h)$
+   - Accumulate numerator $\sum w_i Y_i$ and denominator $\sum w_i$
+   - Accumulate variance numerator $\sum w_i^2 \tilde{\epsilon}_i^2$
+2. Prediction = numerator / denominator
+3. Standard error = $\sqrt{\sum w_i^2 \tilde{\epsilon}_i^2} \;/\; \sum w_i$
+4. Return prediction, or `SV_missval` and set `*se = SV_missval` if denominator is zero
+
+---
+
+##### `nw_eval_mv_with_se`
+
+```c
+static double nw_eval_mv_with_se(double *x, double **train_x, double *train_y,
+                                  double *se_resid, int n_train, int dim,
+                                  double *h, int kernel_type, double *se)
+```
+
+**Purpose**: Multivariate version of `nw_eval_1d_with_se`.  Computes NW prediction and standard error using the product kernel.
+
+**OpenMP**: The training loop is parallelized with `#pragma omp parallel for reduction(+:num, den, se_num)`.
+
+**Complexity**: $O(n_{\text{train}} \cdot \dim)$ per evaluation point.
+
+---
+
+##### `compute_se_residuals_1d`
+
+```c
+static void compute_se_residuals_1d(double *train_x, double *train_y,
+                                     int n_train, double h, int kernel_type,
+                                     int se_type, double *se_resid)
+```
+
+**Purpose**: Compute bias-adjusted residuals $\tilde{\epsilon}_i$ for the standard error formula in 1D NW regression.
+
+**Parameters**:
+- `train_x`, `train_y`: training data arrays
+- `n_train`: number of training observations
+- `h`: bandwidth
+- `kernel_type`: kernel selector
+- `se_type`: 0=full-sample, 1=leave-one-out, 2=leverage-corrected
+- `se_resid`: output array (length `n_train`)
+
+**Behavior by `se_type`**:
+- **0**: $\tilde{\epsilon}_i = Y_i - \hat{m}(X_i)$ (full-sample fit)
+- **1**: $\tilde{\epsilon}_i = Y_i - \hat{m}_{-i}(X_i)$ (leave-one-out; computed analytically as $(\text{num} - K(0) Y_i) / (\text{den} - K(0))$)
+- **2**: $\tilde{\epsilon}_i = (Y_i - \hat{m}(X_i)) / (1 - L_{ii})$ where $L_{ii} = K(0) / \text{den}$ (leverage correction)
+
+---
+
+##### `compute_se_residuals_mv`
+
+```c
+static void compute_se_residuals_mv(double **train_x, double *train_y,
+                                     int n_train, int dim, double *h,
+                                     int kernel_type, int se_type,
+                                     double *se_resid)
+```
+
+**Purpose**: Multivariate version of `compute_se_residuals_1d`.
+
+**Key difference**: Leverage uses the product kernel at zero: $L_{ii} = K(0)^{\dim} / \text{den}$.
 
 ---
 
@@ -408,6 +534,8 @@ STDLL stata_call(int argc, char *argv[])
 - `nreg(N)` — number of regressors (default: 1)
 - `ntarget(N)` — 0 or 1 (whether a target variable is provided)
 - `ngroup(N)` — number of group variables
+- `nse(N)` — 0 or 1 (whether an SE output variable is provided)
+- `se_type(N)` — SE residual method: 0=full-sample, 1=leave-one-out, 2=leverage-corrected (default: 2)
 - `minobs(N)` — minimum observations per group (default: 0)
 - `nfolds(N)` — number of CV folds (default: 10)
 - `ngrids(N)` — CV grid candidates per side (default: 10)
@@ -421,7 +549,8 @@ STDLL stata_call(int argc, char *argv[])
 | `nreg + 2 .. nreg + 1 + ntarget` | Target variable (if `ntarget > 0`) |
 | `nreg + 2 + ntarget .. nreg + 1 + ntarget + ngroup` | Group variables (if `ngroup > 0`) |
 | `nreg + 2 + ntarget + ngroup` | Result (output) variable |
-| `nreg + 3 + ntarget + ngroup` | `touse` variable (internal) |
+| `nreg + 3 + ntarget + ngroup` | SE output variable (if `nse > 0`) |
+| `nreg + 3 + ntarget + ngroup + nse` | `touse` variable (internal) |
 
 **Execution flow**:
 
@@ -432,7 +561,8 @@ STDLL stata_call(int argc, char *argv[])
 │  nreg+1        : response (Y)                                 │
 │  nreg+2..      : target (if ntarget>0)                        │
 │  nreg+2+ntarget.. : group variables (if ngroup>0)             │
-│  last-1        : result variable                              │
+│  last-1-nse    : result variable                              │
+│  last-nse      : SE variable (if nse>0)                       │
 │  last          : touse indicator (0/1)                        │
 └─────────────────────────────────────────────────────────────┘
                                ↓
@@ -473,6 +603,7 @@ STDLL stata_call(int argc, char *argv[])
 - `target=0` observations form the training set; `target=1` observations get predictions but do not contribute to bandwidth estimation or training
 - In grouped estimation, each group uses only its own training data, producing group-specific bandwidths
 - The group count is saved to Stata scalar `nwreg_ngroups` via `SF_scal_save`
+- When `nse > 0`, standard errors are computed using a heteroskedasticity-robust local variance estimator based on training-set residuals (see "Standard Error Estimation" section above)
 
 ---
 

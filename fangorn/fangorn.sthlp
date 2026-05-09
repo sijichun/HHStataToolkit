@@ -30,6 +30,7 @@
 {synopt :{opt maxleafnodes(#)}}maximum number of leaf nodes; default is unlimited{p_end}
 {synopt :{opt criterion(string)}}split criterion: {cmd:gini}, {cmd:entropy}, {cmd:mse}{p_end}
 {synopt :{opt nclasses(#)}}number of classes (auto-detected for classification){p_end}
+{synopt :{opt mtry(#)}}features sampled per split; default is -1 (auto: sqrt(p) for classify, p/3 for regress){p_end}
 {synopt :{opt generate(string)}}prefix for output variables (required){p_end}
 {synopt :{opt predname(string)}}name for prediction variable{p_end}
 {synopt :{opt target(varname)}}0/1 variable: 0=training, 1=test{p_end}
@@ -54,9 +55,11 @@ split finding per node.
 {phang}{opt type(string)}: specifies the model type.  {cmd:classify} (default)
 for categorical outcomes, {cmd:regress} for continuous outcomes.
 
-{phang}{opt ntree(#)}: number of trees in the forest.  Currently only
-{cmd:ntree(1)} is supported (single decision tree).  Random forest support is
-planned for a future release.
+{phang}{opt ntree(#)}: number of trees in the forest.  {cmd:ntree(1)} (default)
+trains a single decision tree; {cmd:ntree(#)} with # > 1 trains a random forest
+using bootstrap sampling and feature subsampling.  When {cmd:ntree} > 1, per-tree
+leaf IDs are not available; the plugin returns aggregated predictions and an
+out-of-bag (OOB) error estimate.
 
 {phang}{opt maxdepth(#)}: maximum depth of the tree (root=0).  Default is 20.
 The tree stops growing when this depth is reached.
@@ -123,7 +126,14 @@ Mermaid flowchart file for documentation or visualization.  The file is
 overwritten if it exists.
 
 {phang}{opt seed(#)}: random seed for the internal PRNG.  Default is 12345.
-Currently only used for reproducibility of the bootstrap in future releases.
+Controls reproducibility of bootstrap sampling and feature subsampling.  Each
+tree uses {cmd:seed} + tree_index as its own seed, so the forest is fully
+reproducible when the same {cmd:seed()} is specified.
+
+{phang}{opt mtry(#)}: number of features randomly sampled as candidates at each
+split.  Default is -1 (automatic): {cmd:sqrt(p)} for classification, {cmd:p/3}
+for regression, where p is the number of independent variables.  Set to a
+positive integer to override.  When {cmd:ntree(1)}, this option is ignored.
 
 {phang}{opt if(exp)}: Stata {cmd:if} qualifier, but specified as an option
 using parentheses: {cmd:if(condition)}.  This workaround avoids a Stata 18
@@ -140,9 +150,13 @@ syntax parsing issue with long option lists.{p_end}
 {pmore}
 {phang2}{it:prefix}_pred: predicted value.  For classification, this is the
 predicted class label (integer).  For regression, this is the predicted mean.
+With {cmd:ntree} > 1, predictions are aggregated across all trees (majority
+vote for classification, mean for regression).
 
 {phang2}{it:prefix}: leaf node ID (heap-style binary tree identifier).  Each
-unique value identifies a distinct leaf in the tree.
+unique value identifies a distinct leaf in the tree.  When {cmd:ntree} > 1,
+this variable is set to 0 for all observations (leaf IDs are not meaningful
+for a forest).
 
 {marker stored_results}{...}
 {title:Stored Results}
@@ -154,6 +168,7 @@ unique value identifies a distinct leaf in the tree.
 {cmd:r(ntree)}    number of trees{p_end}
 {cmd:r(maxdepth)} maximum tree depth{p_end}
 {cmd:r(type)}     model type ({cmd:classify} or {cmd:regress}){p_end}
+{cmd:r(oob_error)}out-of-bag error estimate (misclassification rate for classify, MSE for regress); only when {cmd:ntree} > 1{p_end}
 
 {marker examples}{...}
 {title:Examples}
@@ -186,6 +201,12 @@ Use 5-fold cross-validation to select the optimal tree depth.
 
 {phang2}. {cmd:fangorn y x1 x2, type(regress) generate(pred) entcvdepth(10) maxdepth(15)}{p_end}
 Regression tree with 10-fold CV for depth selection, considering depths 1 to 15.
+
+{phang2}. {cmd:fangorn y x1 x2, generate(pred) ntree(100) mtry(3)}{p_end}
+Random forest with 100 trees, sampling 3 features per split.
+
+{phang2}. {cmd:fangorn y x1 x2, type(regress) generate(pred) ntree(50) seed(42)}{p_end}
+Regression random forest with 50 trees and reproducible seed.
 
 {marker references}{...}
 {title:References}

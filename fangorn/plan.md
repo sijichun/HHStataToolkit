@@ -58,20 +58,15 @@
 
 **深度限制**：`int32` 最大支持深度 30（2^30 > 10 亿节点）。用户确认 30 层足够，因此使用 `int` 类型存储 node_id 完全可行。
 
-### 2.3 树生长策略：Best-First vs Recursive
+### 2.3 树生长策略：Recursive CART
 
-**原设计想法**：Best-first 策略——每轮并行计算所有叶子的最佳 split，只执行下降最大的那个，重复直到停止。
+**决策**：统一使用 **recursive (CART)** 策略。
 
-**评估**：
-
-| 策略 | 优点 | 缺点 | 适用场景 |
-|------|------|------|----------|
-| **Best-first** | 相同叶子数下总 impurity 更低；易控制最大叶子数 | 实现复杂；每轮需全局同步；建树速度慢（100 叶子需 100 轮） | 单棵决策树优化；Boosting 小树 |
-| **Recursive (CART)** | 实现简单；建树速度快；与文献一致 | 树的形状固定（深度优先）；不易精确控制叶子数 | 随机森林；通用决策树 |
-
-**决策**：
-- **决策树模式**：支持 best-first（用户可选）和 recursive 两种策略
-- **随机森林模式**：强制使用 recursive。原因：随机森林通常每棵树有数百至数千叶子，best-first 的轮次开销过大；且随机森林不需要每棵树都是"最优"的，个体树的过拟合反而增加 ensemble 多样性。
+**理由**：
+- 实现简单，建树速度快，与文献一致
+- 随机森林通常每棵树有数百至数千叶子，recursive 策略效率更高
+- 随机森林不需要每棵树都是"最优"的，个体树的过拟合反而增加 ensemble 多样性
+- 通过 `maxdepth`、`minsamplessplit`、`minsamplesleaf`、`minimpuritydecrease`、`relimpdec` 和 `maxleafnodes` 等参数已能充分控制树的复杂度
 
 ### 2.4 分位数 vs 排序唯值（Split 阈值选择）
 
@@ -210,7 +205,7 @@ fangorn/
 │ fangorn.ado                                                      │
 │   - 解析语法、验证参数                                            │
 │   - 创建 touse 标记变量                                           │
-│   - 处理 string group vars → numeric（如有）                     │
+
 │   - 生成输出变量（pred, leaf_id, importance）                     │
 │   - 构建 plugin_vars 列表                                         │
 └─────────────────────────────────────────────────────────────────┘
@@ -336,7 +331,6 @@ typedef struct {
     double impurity_decrease; /* impurity 下降量 */
     int n_left;               /* 左子节点样本数 */
     int n_right;              /* 右子节点样本数 */
-    int node_idx;             /* 归属节点索引（仅 best-first 模式使用） */
 } SplitResult;
 
 /* 最佳 split 查找上下文（线程私有） */
@@ -434,71 +428,7 @@ void build_node_recursive(DecisionTree *tree, TreeNode *node,
 }
 ```
 
-### 5.2 Best-First 决策树（可选模式）
 
-```c
-DecisionTree* build_tree_bestfirst(Dataset *data, TreeParams *params)
-{
-    /* 初始化 */
-    DecisionTree *tree = create_tree(params);
-    int *all_samples = range(0, data->n_obs);
-    
-    /* 创建根节点 */
-    int root_idx = add_node(tree);
-    tree->nodes[root_idx].is_leaf = 1;
-    tree->nodes[root_idx].n_samples = data->n_obs;
-    
-    /* Leaf 队列：存储可分裂的叶子节点 */
-    int *leaf_queue = malloc(params->max_leaf_nodes * sizeof(int));
-    int n_leaves = 1;
-    leaf_queue[0] = root_idx;
-    
-    /* 主循环 */
-    while (n_leaves < params->max_leaf_nodes && n_leaves > 0) {
-        /* 并行计算每个叶子的最佳 split */
-        SplitResult *splits = malloc(n_leaves * sizeof(SplitResult));
-        
-        #pragma omp parallel for
-        for (int i = 0; i < n_leaves; i++) {
-            int node_idx = leaf_queue[i];
-            TreeNode *node = &tree->nodes[node_idx];
-            int *node_samples = get_node_samples(tree, node_idx); /* 动态提取 */
-            
-            splits[i] = find_best_split(data, node_samples, node->n_samples,
-                                         params, tree->n_classes);
-            splits[i].node_idx = node_idx; /* 记录归属 */
-        }
-        
-        /* 找全局最佳 split */
-        int best_idx = 0;
-        for (int i = 1; i < n_leaves; i++) {
-            if (splits[i].impurity_decrease > splits[best_idx].impurity_decrease)
-                best_idx = i;
-        }
-        
-        if (splits[best_idx].impurity_decrease <= params->min_impurity_decrease) {
-            free(splits);
-            break; /* 无有效 split */
-        }
-        
-        /* 执行最佳 split */
-        int split_node_idx = leaf_queue[best_idx];
-        execute_split(tree, split_node_idx, splits[best_idx]);
-        
-        /* 更新 leaf 队列：移除被 split 的节点，添加两个新叶子 */
-        leaf_queue[best_idx] = tree->nodes[split_node_idx].left_child;
-        leaf_queue[n_leaves] = tree->nodes[split_node_idx].right_child;
-        n_leaves++;
-        
-        free(splits);
-    }
-    
-    free(leaf_queue);
-    return tree;
-}
-```
-
-**注意**：best-first 模式下，需要为每个叶子动态提取样本（通过遍历全量数据，检查 node_id 归属）。这在每轮迭代中有 O(n) 开销，当叶子数增多时成本上升。
 
 ### 5.3 最佳 Split 查找（核心计算）
 
@@ -1017,8 +947,6 @@ for (int t = 0; t < n_trees; t++) {
 |------|------|
 | 嵌套并行（树级别 + 特征级别同时） | OpenMP nested 复杂，性能不可预测 |
 | `#pragma omp parallel for` 在递归函数内部 | 每节点分裂都创建线程，开销巨大 |
-| 对叶子队列的并行修改（best-first） | 需要锁保护，串行化严重 |
-
 ---
 
 ## 8. Stata-C 接口设计
@@ -1032,12 +960,11 @@ for (int t = 0; t < n_trees; t++) {
 | 1 .. n_features | 特征变量（X，indepvars） |
 | n_features + 1 | 因变量（y，depvar） |
 | n_features + 2 | target 变量（可选，0=训练，1=测试） |
-| n_features + 3 | group 变量（可选） |
-| n_features + 4 | 输出变量：聚合预测值（分类=类别，回归=均值） |
-| n_features + 5 .. n_features + 4 + ntree | 输出变量：每棵树的叶子节点 ID（每棵树一列） |
-| n_features + 5 + ntree | touse 标记变量（0/1） |
+| n_features + 3 | 输出变量：聚合预测值（分类=类别，回归=均值） |
+| n_features + 4 .. n_features + 3 + ntree | 输出变量：每棵树的叶子节点 ID（每棵树一列） |
+| n_features + 4 + ntree | touse 标记变量（0/1） |
 
-**布局与 nwreg 完全一致**：features → y → target(0/1) → group → result → touse。插件在 C 端通过 `extract_option_value` 接收 `nfeatures`、`ntarget`、`ngroup` 等参数来确定偏移量，不使用 `SF_nvar()`（后者返回数据集总变量数而非插件变量数）。
+**布局与 nwreg 一致**：features → y → target(0/1) → result → touse。插件在 C 端通过 `extract_option_value` 接收 `nfeatures`、`ntarget` 等参数来确定偏移量，不使用 `SF_nvar()`（后者返回数据集总变量数而非插件变量数）。
 
 **每棵树一列的存储设计**：
 
@@ -1063,11 +990,8 @@ for (int t = 0; t < n_trees; t++) {
 | ntiles | `ntiles(10)` | 分位数数量（0=使用排序唯值） |
 | criterion | `criterion(gini)` / `criterion(entropy)` / `criterion(mse)` | Impurity 指标 |
 | seed | `seed(42)` | 随机种子 |
-| strategy | `strategy(recursive)` / `strategy(bestfirst)` | 树生长策略 |
-| maxleafnodes | `maxleafnodes(100)` | 最大叶子数（仅 best-first） |
 | importance | `importance(1)` | 是否计算特征重要性 |
 | ntarget | `ntarget(1)` | 是否有 target 变量 |
-| ngroup | `ngroup(1)` | group 变量数 |
 | nclasses | `nclasses(3)` | 分类任务中的类别数（回归=0，由 ado 层从数据中提取） |
 
 ### 8.3 Stata ado 命令语法
@@ -1086,14 +1010,11 @@ fangorn depvar indepvars,
       ntiles(integer 0)                 /* 分位数阈值（0=排序唯值） */
       criterion(string)                 /* gini/entropy/mse */
       seed(integer 12345)               /* 随机种子 */
-      strategy(string)                  /* recursive/bestfirst */
-      maxleafnodes(integer 1000)        /* 最大叶子数 */
       nclasses(integer -1)              /* 类别数（-1=自动检测，回归=0，分类>0） */
       generate(string)                  /* 节点 ID 变量名前缀（随机森林生成多列：prefix_t1, prefix_t2...） */
       predname(string)                  /* 聚合预测值变量名（默认 prefix_pred） */
       importance(string)                /* 特征重要性变量名 */
       target(varname)                   /* 训练/测试分割变量（0=训练，1=测试） */
-      group(varlist)                    /* 分组变量 */
       if(string)                        /* if 条件（字符串选项，非 Stata qualifier） */
       in(string)                        /* in 条件（同上） */
     ]
@@ -1139,10 +1060,28 @@ fangorn depvar indepvars,
 
 **目标**：多棵树集成 + 特征重要性
 
+**交叉验证策略**：
+
+1. **决策树模式（ntree=1）**：默认启用每棵树交叉验证（`entcvdepth > 0`），通过CV选择最优 `max_depth`。
+
+2. **随机森林模式（ntree>1）**：**禁用每棵树的交叉验证**。原因：
+   - 随机森林每棵树只使用约63.2%的bootstrap样本，天然带有训练/验证分割（OOB样本）
+   - 对每棵树单独做CV开销巨大且没必要——随机森林的ensemble效应本身就缓解了过拟合
+   - 个体树的过拟合反而增加ensemble多样性
+
+3. **森林级参数交叉验证**：当 `ntree > 1` 且 `entcvdepth > 0` 时，使用**单树代理CV**确定森林参数：
+   - 在训练集上训练一棵单独的决策树，做K折CV选择 `max_depth`
+   - 将该 `max_depth` 应用于随机森林的所有树
+   - 这样只需一次CV开销，即可为整个森林确定合适的深度
+   - 同理可用于 `minsamplesleaf`、`relimpdec` 等参数（先单树CV确定，再应用于森林）
+
+**实现步骤**：
+
 1. **Week 2.1**：森林核心
    - [ ] `forest.h/c`：RandomForest 结构，`build_random_forest()`
    - [ ] 树级别 OpenMP 并行
    - [ ] Bootstrap 采样 + OOB 误差计算
+   - [ ] 区分ntree=1（决策树，每树CV）vs ntree>1（森林，森林级CV或禁用CV）
 
 2. **Week 2.2**：预测与评估
    - [ ] `predict_forest()`：分类投票 / 回归平均
@@ -1153,24 +1092,15 @@ fangorn depvar indepvars,
    - [ ] 与 scikit-learn 结果对比验证
    - [ ] 性能基准测试（不同数据规模）
 
-### Phase 3：高级功能（1-2 周）
+### Phase 3：性能优化与文档（1 周）
 
-**目标**：Best-first 策略 + 额外功能
-
-1. **Week 3.1**：Best-first 决策树
-   - [ ] `build_tree_bestfirst()` 实现
-   - [ ] Leaf 队列管理
-   - [ ] 节点归属数组维护
-
-2. **Week 3.2**：增强功能
-   - [ ] best-first 模式下的动态节点归属维护
-   - [ ] Group 变量支持（类似 kdensity2）
-   - [ ] 更完善的 Stata 帮助文件（.sthlp）
-
-3. **Week 3.3**：性能优化
+1. **Week 3.1**：性能优化
    - [ ] 可选分位数策略实现（`ntiles` 参数，不启用预排序时的回退方案）
    - [ ] SIMD 向量化（impurity 计算）
    - [ ] 内存池分配（减少 malloc/free 开销）
+
+2. **Week 3.2**：文档完善
+   - [ ] 更完善的 Stata 帮助文件（.sthlp）
 
 ### Phase 4：文档与发布（1 周）
 
@@ -1188,7 +1118,6 @@ fangorn depvar indepvars,
 | 问题 | 影响 | 缓解策略 |
 |------|------|----------|
 | **预排序内存开销** | `sorted_indices[n_features][n_obs]` 需要 `n_features × n_obs × 4` bytes 额外内存。p=100, n=100K 时约 40MB | 对超大 n 可禁用预排序，回退到每节点排序；或只预排序 `mtry` 个随机特征子集 |
-| **Best-first 内存开销** | 每轮需动态提取节点样本，O(n × n_leaves) | 仅用于单棵决策树；随机森林用 recursive |
 | **OpenMP 嵌套限制** | 树级别+特征级别同时并行导致性能下降 | 明确分层：外层树并行，内层串行 |
 | **分类变量处理** | C 端不原生支持分类变量 | Stata 端用 `egen group()` 预处理 |
 | **缺失值处理** | Stata 缺失值传入 C 后变为 0（当前 utils.c 行为） | 在 ado 层用 `if` 过滤，或在 C 端增加缺失值检查 |
@@ -1205,7 +1134,7 @@ fangorn depvar indepvars,
 ### 10.2 设计权衡记录
 
 1. **Double vs Float**：**确认保留 Double**。用户要求与 Stata 原生类型一致，精度优先
-2. **Best-first vs Recursive**：两者都支持，随机森林强制 Recursive（效率优先）
+2. **树生长策略**：统一使用 **recursive (CART)**，实现简单且效率高
 3. **分位数 vs 排序唯值**：**默认预排序 + 排序唯值**（精确，O(m) 每节点），可选分位数（快速近似）
 4. **树级别 vs 节点级别并行**：树级别为主（简单且扩展性好）。只读数据无需同步，符合 scikit-learn 模式
 5. **OOB 误差计算**：每棵树构建时同步计算（增加内存但避免二次遍历）
@@ -1227,7 +1156,7 @@ fangorn depvar indepvars,
 |----------|------|----------|
 | n=10,000, p=10, ntree=100 | 分类 | < 5 秒 |
 | n=100,000, p=50, ntree=100 | 分类 | < 2 分钟 |
-| n=10,000, p=10, ntree=1 | 决策树（best-first, 100 叶子） | < 1 秒 |
+| n=10,000, p=10, ntree=1 | 决策树（recursive, maxdepth=10） | < 1 秒 |
 
 ### 11.2 优化方向
 
@@ -1251,9 +1180,7 @@ fangorn depvar indepvars,
 
 - [ ] `test_fangorn_basic.do`：基本分类/回归，小数据集
 - [ ] `test_fangorn_target.do`：target=0/1 划分
-- [ ] `test_fangorn_group.do`：group 变量分组
 - [ ] `test_fangorn_importance.do`：特征重要性验证
-- [ ] `test_fangorn_bestfirst.do`：best-first vs recursive 一致性
 - [ ] `test_fangorn_compare_sklearn.do`：与 Python scikit-learn 结果对比
 
 ### 12.3 性能测试
@@ -1312,7 +1239,7 @@ static inline int lcg_randint(LCGState *rng, int max) {
 3. **分层并行（线程安全确认）**：
    - 随机森林：树级别并行，特征矩阵 `const` 只读，**无需任何同步**
    - 单棵树：特征级别并行（`ntree=1` 时），线程私有缓冲区
-4. **Recursive + Best-first 双策略**：随机森林强制 Recursive（效率优先）
+4. **Recursive CART 策略**：实现简单，建树速度快，与文献一致
 5. **预排序索引继承 + 分位数**：
    - **默认**：全局预排序 + 索引继承，每节点 split 查找 O(m)（scikit-learn 核心优化）
    - **可选**：分位数策略（`ntiles`），从预排序数组直接取位置

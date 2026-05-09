@@ -33,9 +33,6 @@ static double kde_eval_mv(double *x, double **train_data, int n_train,
     double *u = (double*)malloc(dim * sizeof(double));
     if (!u) return 0.0;
 
-#ifdef _OPENMP
-#pragma omp parallel for reduction(+:sum)
-#endif
     for (j = 0; j < n_train; j++) {
         for (d = 0; d < dim; d++) {
             u[d] = (x[d] - train_data[d][j]) / h[d];

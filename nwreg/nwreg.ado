@@ -16,6 +16,8 @@ program define nwreg, rclass
            TARget(varname numeric) ///
            GRoup(varlist) ///
            GENerate(string) ///
+           SEType(integer 2) ///
+           SE(string) ///
            MINcount(integer 0) ///
            FOLDS(integer 10) ///
            GRIDs(integer 10) ///
@@ -120,11 +122,31 @@ program define nwreg, rclass
         quietly generate double `gen_var' = .
     }
     
+    /* Create SE output variable (if requested) */
+    local nse = 0
+    if "`se'" != "" {
+        local nse 1
+        capture confirm new variable `se'
+        if _rc {
+            quietly replace `se' = .
+        }
+        else {
+            quietly generate double `se' = .
+        }
+    }
+    
+    /* Validate se_type */
+    if `setype' < 0 | `setype' > 2 {
+        display as error "se_type must be 0, 1, or 2"
+        exit 198
+    }
+    
     /* Build variable list for plugin */
     local plugin_vars "`indepvars' `depvar'"
     if `ntarget' local plugin_vars "`plugin_vars' `target'"
     if `ngroup' > 0 local plugin_vars "`plugin_vars' `groupvars'"
     local plugin_vars "`plugin_vars' `gen_var'"
+    if `nse' local plugin_vars "`plugin_vars' `se'"
     local plugin_vars "`plugin_vars' `touse'"
     
     /* Load plugin (capture avoids "already defined" on repeated calls) */
@@ -144,6 +166,8 @@ program define nwreg, rclass
     local plugin_args "`plugin_args' nreg(`nreg')"
     local plugin_args "`plugin_args' ntarget(`ntarget')"
     local plugin_args "`plugin_args' ngroup(`ngroup')"
+    local plugin_args "`plugin_args' nse(`nse')"
+    local plugin_args "`plugin_args' se_type(`setype')"
     local plugin_args "`plugin_args' minobs(`mincount')"
     local plugin_args "`plugin_args' nfolds(`folds')"
     local plugin_args "`plugin_args' ngrids(`grids')"
@@ -191,9 +215,15 @@ program define nwreg, rclass
     display as text "Observations: " as result r(N)
     display as text "Kernel:       " as result "`kernel_opt'"
     display as text "Bandwidth:    " as result "`bw_opt'"
+    if `nse' {
+        display as text "SE variable:  " as result "`se'"
+    }
     display as text "{hline 40}"
     
-    /* Label variable */
+    /* Label variables */
     label variable `gen_var' "Nadaraya-Watson regression estimate"
+    if `nse' {
+        label variable `se' "NW regression standard error"
+    }
     
 end

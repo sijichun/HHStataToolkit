@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "utils_rf.h"
 
 /* ============================================================================
  * Criterion Codes
@@ -68,7 +69,19 @@ typedef struct {
     int    criterion;           /* CRITERION_GINI / ENTROPY / MSE */
     int    is_classifier;
     int    n_classes;
+    int    mtry;                /* features per split: -1 = use all features */
 } TreeParams;
+
+/* ============================================================================
+ * Random Forest Structure
+ * ============================================================================ */
+
+typedef struct {
+    DecisionTree **trees;       /* array of ntree independent decision trees */
+    int            ntree;
+    double        *importance;  /* MDI feature importance, length = n_features */
+    double         oob_error;   /* OOB error: misclassification rate or MSE */
+} RandomForest;
 
 /* ============================================================================
  * Function Declarations
@@ -104,15 +117,17 @@ int all_same_y(const Dataset *data, const int *sample_idx, int n_samples);
 /*
  * Recursively build the subtree rooted at node_idx.
  * sample_idx[0..n_samples-1] are the original observation indices in this node.
+ * rng: LCG state for mtry feature subsampling (NULL = use all features).
  */
 void build_node_recursive(DecisionTree *tree, int node_idx,
                             Dataset *data, int *sample_idx, int n_samples,
                             const TreeParams *params, int depth,
-                            int *n_leaves);
+                            int *n_leaves, lcg_state_t *rng);
 
-/* Build the full tree: allocates root node and starts recursion. */
+/* Build the full tree: allocates root node and starts recursion.
+ * rng: LCG state for mtry feature subsampling (NULL = use all features). */
 void build_tree(DecisionTree *tree, Dataset *data, const TreeParams *params,
-                int *sample_idx, int n_samples);
+                int *sample_idx, int n_samples, lcg_state_t *rng);
 
 /*
  * Predict for observation obs_idx (original index into data).
@@ -136,6 +151,32 @@ int precompute_sorted_indices(Dataset *data);
 
 /* Free sorted_indices allocated by precompute_sorted_indices */
 void free_sorted_indices(Dataset *data);
+
+/*
+ * Random Forest API
+ */
+
+/* Allocate a RandomForest with ntree empty tree slots and zeroed importance[n_features].
+ * Returns NULL on allocation failure. */
+RandomForest *create_forest(int ntree, int n_features);
+
+/* Free all trees, importance array, and the forest struct itself. */
+void free_forest(RandomForest *forest, int n_features);
+
+/*
+ * Build the full random forest.
+ *   train_idx[0..n_train-1]: original observation indices used for training.
+ *   seed: base RNG seed; tree t uses seed+t for its bootstrap sample.
+ * After return: forest->oob_error and forest->importance[] are populated.
+ */
+void build_random_forest(RandomForest *forest, Dataset *data, TreeParams *params,
+                         int *train_idx, int n_train, unsigned int seed);
+
+/* Regression ensemble prediction: mean leaf value across all trees. */
+double predict_forest(RandomForest *forest, Dataset *data, int obs_idx);
+
+/* Classification ensemble prediction: majority vote across all trees. */
+int predict_forest_class(RandomForest *forest, Dataset *data, int obs_idx, int n_classes);
 
 /*
  * Export tree structure to a Mermaid flowchart file.

@@ -2,6 +2,7 @@
 #define SPLIT_H
 
 #include "ent.h"
+#include "utils_rf.h"
 
 typedef double (*ImpurityFunc)(const double *y, const int *idx, int n, int n_classes);
 
@@ -22,6 +23,6 @@ ImpurityFunc get_impurity_func(int criterion);
 
 void find_best_split(Dataset *data, const int *sample_idx, int n_samples,
                      double parent_impurity, const TreeParams *params,
-                     SplitResult *result);
+                     SplitResult *result, lcg_state_t *rng);
 
 #endif /* SPLIT_H */

@@ -2,6 +2,7 @@
 #include "split.h"
 #include "utils_rf.h"
 #include <stdio.h>
+#include <string.h>
 
 static int count_subtree_leaves(const DecisionTree *tree, int node)
 {
@@ -110,7 +111,7 @@ int all_same_y(const Dataset *data, const int *sample_idx, int n_samples)
 void build_node_recursive(DecisionTree *tree, int node_idx,
                            Dataset *data, int *sample_idx, int n_samples,
                            const TreeParams *params, int depth,
-                           int *n_leaves)
+                           int *n_leaves, lcg_state_t *rng)
 {
     SplitResult split;
     ImpurityFunc imp_fn;
@@ -134,7 +135,7 @@ void build_node_recursive(DecisionTree *tree, int node_idx,
     imp_fn = get_impurity_func(params->criterion);
     parent_impurity = imp_fn(data->y, sample_idx, n_samples, params->n_classes);
 
-    find_best_split(data, sample_idx, n_samples, parent_impurity, params, &split);
+    find_best_split(data, sample_idx, n_samples, parent_impurity, params, &split, rng);
 
     if (!split.found) {
         make_leaf(tree, node_idx, data, sample_idx, n_samples, params);
@@ -148,8 +149,8 @@ void build_node_recursive(DecisionTree *tree, int node_idx,
     tree->nodes[node_idx].split_threshold   = split.threshold;
     tree->nodes[node_idx].impurity_decrease = split.impurity_decrease;
 
-    left_idx  = (int *)malloc((size_t)split.left_n  * sizeof(int));
-    right_idx = (int *)malloc((size_t)split.right_n * sizeof(int));
+    left_idx  = (int *)malloc((size_t)n_samples * sizeof(int));
+    right_idx = (int *)malloc((size_t)n_samples * sizeof(int));
     if (!left_idx || !right_idx) {
         free(left_idx);
         free(right_idx);
@@ -186,16 +187,16 @@ void build_node_recursive(DecisionTree *tree, int node_idx,
     tree->nodes[node_idx].right_child = right_child_idx;
 
     build_node_recursive(tree, left_child_idx,  data, left_idx,  left_n,
-                         params, depth + 1, n_leaves);
+                         params, depth + 1, n_leaves, rng);
     build_node_recursive(tree, right_child_idx, data, right_idx, right_n,
-                         params, depth + 1, n_leaves);
+                         params, depth + 1, n_leaves, rng);
 
     free(left_idx);
     free(right_idx);
 }
 
 void build_tree(DecisionTree *tree, Dataset *data, const TreeParams *params,
-                int *sample_idx, int n_samples)
+                int *sample_idx, int n_samples, lcg_state_t *rng)
 {
     int root_idx = add_node_to_tree(tree, 0, 0, -1);
     if (root_idx < 0) return;
@@ -208,14 +209,14 @@ void build_tree(DecisionTree *tree, Dataset *data, const TreeParams *params,
         TreeParams temp_params = *params;
         temp_params.min_impurity_decrease = 0.0;
         SplitResult split;
-        find_best_split(data, sample_idx, n_samples, parent_impurity, &temp_params, &split);
+        find_best_split(data, sample_idx, n_samples, parent_impurity, &temp_params, &split, rng);
         if (split.found) {
             params_copy.min_impurity_decrease = params->min_impurity_decrease_factor * split.impurity_decrease;
         }
     }
 
     int n_leaves = 0;
-    build_node_recursive(tree, root_idx, data, sample_idx, n_samples, &params_copy, 0, &n_leaves);
+    build_node_recursive(tree, root_idx, data, sample_idx, n_samples, &params_copy, 0, &n_leaves, rng);
 
     if (params->max_leaf_nodes > 0) {
         while (n_leaves > params->max_leaf_nodes) {
@@ -367,4 +368,237 @@ int export_tree_mermaid(const DecisionTree *tree, const char *filename,
     fprintf(fp, "```\n");
     fclose(fp);
     return 0;
+}
+
+/* ============================================================================
+ * Random Forest: create / free
+ * ============================================================================ */
+
+RandomForest *create_forest(int ntree, int n_features)
+{
+    RandomForest *forest;
+    int t;
+
+    forest = (RandomForest *)malloc(sizeof(RandomForest));
+    if (!forest) return NULL;
+
+    forest->ntree      = ntree;
+    forest->oob_error  = 0.0;
+
+    forest->trees = (DecisionTree **)malloc((size_t)ntree * sizeof(DecisionTree *));
+    if (!forest->trees) { free(forest); return NULL; }
+    for (t = 0; t < ntree; t++) forest->trees[t] = NULL;
+
+    forest->importance = (double *)calloc((size_t)n_features, sizeof(double));
+    if (!forest->importance) {
+        free(forest->trees);
+        free(forest);
+        return NULL;
+    }
+
+    return forest;
+}
+
+void free_forest(RandomForest *forest, int n_features)
+{
+    int t;
+    (void)n_features;
+    if (!forest) return;
+    if (forest->trees) {
+        for (t = 0; t < forest->ntree; t++)
+            free_tree(forest->trees[t]);
+        free(forest->trees);
+    }
+    free(forest->importance);
+    free(forest);
+}
+
+/* ============================================================================
+ * Random Forest: build
+ *
+ * Strategy (avoids all race conditions):
+ *   Pass 1 — OpenMP parallel: build each tree on its own bootstrap sample.
+ *   Pass 2 — Serial: re-generate each bootstrap mask (deterministic), accumulate
+ *             OOB predictions and MDI importance.
+ * ============================================================================ */
+
+void build_random_forest(RandomForest *forest, Dataset *data, TreeParams *params,
+                         int *train_idx, int n_train, unsigned int seed)
+{
+    int t, i, j, f, c;
+    int n_features = data->n_features;
+    int n_classes  = params->n_classes;
+
+    double *oob_sum;
+    int    *oob_count;
+    int    *oob_votes;   /* flat [n_train * n_classes], classification only */
+
+    double oob_err_sum;
+    int    n_oob_obs;
+    double imp_total;
+    double pred;
+    int    best_vote, best_class;
+    BootstrapSample bs;
+    int    *boot_obs;
+    int     rc;
+
+    /* ------------------------------------------------------------------ */
+    /* Pass 1: parallel tree construction                                  */
+    /* ------------------------------------------------------------------ */
+#pragma omp parallel for schedule(dynamic, 1) private(t, bs, boot_obs, rc, i)
+    for (t = 0; t < forest->ntree; t++) {
+        forest->trees[t] = create_tree();
+        if (!forest->trees[t]) continue;
+
+        rc = bootstrap_sample(n_train, seed + (unsigned int)t, &bs);
+        if (rc != 0) continue;
+
+        boot_obs = (int *)malloc((size_t)bs.n_samples * sizeof(int));
+        if (boot_obs) {
+            lcg_state_t tree_rng;
+            lcg_seed(&tree_rng, seed + 9999 + (unsigned int)t);
+            for (i = 0; i < bs.n_samples; i++)
+                boot_obs[i] = train_idx[bs.indices[i]];
+            build_tree(forest->trees[t], data, params, boot_obs, bs.n_samples, &tree_rng);
+            free(boot_obs);
+        }
+        free_bootstrap(&bs);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Pass 2: serial OOB accumulation                                    */
+    /* ------------------------------------------------------------------ */
+    oob_sum   = (double *)calloc((size_t)n_train, sizeof(double));
+    oob_count = (int    *)calloc((size_t)n_train, sizeof(int));
+    oob_votes = NULL;
+
+    if (params->is_classifier && n_classes > 0)
+        oob_votes = (int *)calloc((size_t)(n_train * n_classes), sizeof(int));
+
+    if (oob_sum && oob_count) {
+        for (t = 0; t < forest->ntree; t++) {
+            if (!forest->trees[t]) continue;
+
+            rc = bootstrap_sample(n_train, seed + (unsigned int)t, &bs);
+            if (rc != 0) continue;
+
+            for (i = 0; i < n_train; i++) {
+                if (!bs.oob_mask[i]) continue;
+                pred = predict_tree(forest->trees[t], data, train_idx[i]);
+                if (params->is_classifier && oob_votes && n_classes > 0) {
+                    c = (int)pred;
+                    if (c >= 0 && c < n_classes)
+                        oob_votes[i * n_classes + c]++;
+                } else {
+                    oob_sum[i] += pred;
+                }
+                oob_count[i]++;
+            }
+
+            free_bootstrap(&bs);
+
+            /* MDI: accumulate impurity_decrease per split_feature */
+            for (j = 0; j < forest->trees[t]->n_nodes; j++) {
+                TreeNode *nd = &forest->trees[t]->nodes[j];
+                f = nd->split_feature;
+                if (!nd->is_leaf && f >= 0 && f < n_features)
+                    forest->importance[f] += nd->impurity_decrease;
+            }
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Compute OOB error                                                   */
+    /* ------------------------------------------------------------------ */
+    oob_err_sum = 0.0;
+    n_oob_obs   = 0;
+
+    for (i = 0; i < n_train; i++) {
+        if (oob_count == NULL || oob_count[i] == 0) continue;
+
+        if (params->is_classifier && oob_votes && n_classes > 0) {
+            best_vote  = -1;
+            best_class = 0;
+            for (c = 0; c < n_classes; c++) {
+                if (oob_votes[i * n_classes + c] > best_vote) {
+                    best_vote  = oob_votes[i * n_classes + c];
+                    best_class = c;
+                }
+            }
+            if (best_class != (int)data->y[train_idx[i]])
+                oob_err_sum += 1.0;
+        } else if (oob_sum) {
+            double mean_pred = oob_sum[i] / (double)oob_count[i];
+            double diff      = mean_pred - data->y[train_idx[i]];
+            oob_err_sum += diff * diff;
+        }
+        n_oob_obs++;
+    }
+
+    forest->oob_error = (n_oob_obs > 0) ? oob_err_sum / (double)n_oob_obs : 0.0;
+
+    /* ------------------------------------------------------------------ */
+    /* Normalize MDI importance: divide by ntree, then normalize to sum=1  */
+    /* ------------------------------------------------------------------ */
+    imp_total = 0.0;
+    for (f = 0; f < n_features; f++) {
+        forest->importance[f] /= (double)forest->ntree;
+        imp_total += forest->importance[f];
+    }
+    if (imp_total > 0.0) {
+        for (f = 0; f < n_features; f++)
+            forest->importance[f] /= imp_total;
+    }
+
+    free(oob_sum);
+    free(oob_count);
+    free(oob_votes);
+}
+
+/* ============================================================================
+ * Random Forest: predict
+ * ============================================================================ */
+
+double predict_forest(RandomForest *forest, Dataset *data, int obs_idx)
+{
+    int t, count;
+    double total;
+
+    total = 0.0;
+    count = 0;
+    for (t = 0; t < forest->ntree; t++) {
+        if (!forest->trees[t]) continue;
+        total += predict_tree(forest->trees[t], data, obs_idx);
+        count++;
+    }
+    return (count > 0) ? total / (double)count : 0.0;
+}
+
+int predict_forest_class(RandomForest *forest, Dataset *data, int obs_idx, int n_classes)
+{
+    int t, c, best_class, best_votes;
+    int *votes;
+
+    if (n_classes <= 0) return 0;
+
+    votes = (int *)calloc((size_t)n_classes, sizeof(int));
+    if (!votes) return 0;
+
+    for (t = 0; t < forest->ntree; t++) {
+        if (!forest->trees[t]) continue;
+        c = (int)predict_tree(forest->trees[t], data, obs_idx);
+        if (c >= 0 && c < n_classes) votes[c]++;
+    }
+
+    best_class = 0;
+    best_votes = votes[0];
+    for (c = 1; c < n_classes; c++) {
+        if (votes[c] > best_votes) {
+            best_votes = votes[c];
+            best_class = c;
+        }
+    }
+
+    free(votes);
+    return best_class;
 }
