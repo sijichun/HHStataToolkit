@@ -2,3 +2,5 @@
 *.png
 *.plugin
 ado/
+*.zip
+test/*.md

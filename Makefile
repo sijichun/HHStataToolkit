@@ -14,7 +14,7 @@
 # Shared source files (under src/)
 COMMON_SRC = src/stplugin.c src/utils.c
 
-# Plugin subdirectories
+# Plugin subdirectories (single-file plugins)
 PLUGINS = kdensity2 nwreg
 
 # Standalone ado files (no C compilation needed)
@@ -43,20 +43,29 @@ endif
 
 ifeq ($(OS),Windows_NT)
     CC = x86_64-w64-mingw32-gcc
-    CFLAGS += -shared -fPIC -DSYSTEM=STWIN32
+    # Note: -DSYSTEM=STWIN32 not needed; stplugin.h defaults to STWIN32
+    CFLAGS += -shared -fPIC -O3 -Wall -Isrc
+    # Static-link GCC runtime to avoid DLL dependency issues in Stata
+    LDFLAGS = -fopenmp -static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic
     PLUGIN_EXT = .plugin
 endif
 
 # Build targets
-.PHONY: all clean install dist help $(PLUGINS)
+.PHONY: all clean install dist help $(PLUGINS) fangorn
 
-all: $(PLUGINS)
+all: $(PLUGINS) fangorn
 
-# Generic plugin build rule
+# Generic plugin build rule (for single-file plugins)
 $(PLUGINS):
 	@echo "Building $@..."
 	$(CC) $(CFLAGS) $(COMMON_SRC) $@/$@.c -o $@/$@$(PLUGIN_EXT) $(LDFLAGS)
 	@echo "$@ build complete."
+
+# Special rule for fangorn (multiple source files)
+fangorn: $(PLUGINS)
+	@echo "Building fangorn..."
+	$(CC) $(CFLAGS) $(COMMON_SRC) fangorn/fangorn.c fangorn/ent.c fangorn/split.c fangorn/utils_rf.c -o fangorn/fangorn.plugin $(LDFLAGS)
+	@echo "fangorn build complete."
 
 # Clean all plugins
 clean:
@@ -64,6 +73,8 @@ clean:
 		echo "Cleaning $$p..."; \
 		rm -f $$p/$$p.plugin; \
 	done
+	@echo "Cleaning fangorn..."
+	@rm -f fangorn/fangorn.plugin
 	@rm -rf ado/plus
 
 # Install: .plugin → ~/ado/plus/, .ado/.sthlp → ~/ado/plus/<letter>/
@@ -76,6 +87,10 @@ install: all
 		cp $$p/$$p.sthlp ~/ado/plus/$$letter/ 2>/dev/null || mkdir -p ~/ado/plus/$$letter && cp $$p/$$p.sthlp ~/ado/plus/$$letter/ 2>/dev/null || true; \
 		echo "  Installed $$p"; \
 	done
+	@echo "Installing fangorn..."
+	@cp fangorn/fangorn.plugin ~/ado/plus/ 2>/dev/null || true
+	@mkdir -p ~/ado/plus/f && cp fangorn/fangorn.ado ~/ado/plus/f/ 2>/dev/null || true
+	@echo "  Installed fangorn"
 	@echo "Installing single_ado files..."
 	@for f in $(SINGLE_ADO_FILES); do \
 		base=$$(basename $$f .ado); \
@@ -101,6 +116,10 @@ dist: all
 		cp $$p/$$p.sthlp ado/plus/$$letter/ 2>/dev/null || true; \
 		echo "  Packaged $$p"; \
 	done
+	@echo "Packaging fangorn..."
+	@cp fangorn/fangorn.plugin ado/plus/ 2>/dev/null || true
+	@mkdir -p ado/plus/f && cp fangorn/fangorn.ado ado/plus/f/ 2>/dev/null || true
+	@echo "  Packaged fangorn"
 	@echo "Packaging single_ado files..."
 	@for f in $(SINGLE_ADO_FILES); do \
 		base=$$(basename $$f .ado); \

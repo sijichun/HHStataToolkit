@@ -151,22 +151,43 @@ clang -bundle -DSYSTEM=APPLEMAC -I/opt/homebrew/opt/openblas/include \
 **Using MinGW-w64 (Recommended):**
 ```bash
 # With MinGW 64-bit (from MSYS2, Cygwin, or standalone)
-x86_64-w64-mingw32-gcc -shared -fPIC -DSYSTEM=STWIN32 stplugin.c myplugin.c -o myplugin.plugin
+# Note: -DSYSTEM=STWIN32 is not needed; stplugin.h defaults to STWIN32 on Windows
+# Use -static-libgcc to avoid runtime DLL dependency issues in Stata
+x86_64-w64-mingw32-gcc -shared -fPIC stplugin.c myplugin.c -o myplugin.plugin
 ```
 
 **Using Cygwin with MinGW cross-compiler:**
 ```bash
 # Install mingw64-x86_64-gcc-core via Cygwin package manager first
-cygwin$ x86_64-w64-mingw32-gcc -shared -fPIC -DSYSTEM=STWIN32 stplugin.c myplugin.c -o myplugin.plugin
+cygwin$ x86_64-w64-mingw32-gcc -shared -fPIC stplugin.c myplugin.c -o myplugin.plugin
 ```
 
 **Important Cygwin Note:**
 Do NOT use plain `gcc` under Cygwin without `-mno-cygwin` (deprecated) or the MinGW cross-compiler. Linking against the Cygwin DLL will cause Stata to fail when reloading the plugin.
 
+**CRITICAL: Windows Runtime DLL Dependency**
+
+MinGW-compiled DLLs depend on runtime libraries (`libgcc_s_seh-1.dll`, `libwinpthread-1.dll`). If these are not in your Windows PATH, Stata will fail to load the plugin with no clear error message. **Solutions:**
+
+1. **Static-link GCC runtime (recommended):**
+```bash
+x86_64-w64-mingw32-gcc -shared -fPIC -static-libgcc stplugin.c myplugin.c -o myplugin.plugin
+```
+
+2. **With OpenMP (static-link libgomp):**
+```bash
+x86_64-w64-mingw32-gcc -shared -fPIC -fopenmp -static-libgcc \
+    -Wl,-Bstatic -lgomp -Wl,-Bdynamic \
+    stplugin.c myplugin.c -o myplugin.plugin
+```
+
+3. **Copy MinGW DLLs to plugin directory** (alternative):
+Copy `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`, and `libgomp-1.dll` from MinGW's `bin/` folder to the same folder as your `.plugin` file.
+
 **With BLAS on Windows:**
 ```bash
 # With OpenBLAS (download prebuilt binaries from https://github.com/xianyi/OpenBLAS/releases)
-x86_64-w64-mingw32-gcc -shared -fPIC -DSYSTEM=STWIN32 -I/path/to/openblas/include \
+x86_64-w64-mingw32-gcc -shared -fPIC -static-libgcc -I/path/to/openblas/include \
     stplugin.c myplugin.c -o myplugin.plugin \
     -L/path/to/openblas/lib -lopenblas
 ```
@@ -174,9 +195,9 @@ x86_64-w64-mingw32-gcc -shared -fPIC -DSYSTEM=STWIN32 -I/path/to/openblas/includ
 **With GSL on Windows:**
 ```bash
 # With GSL (download from http://gnuwin32.sourceforge.net/packages/gsl.htm or build via MSYS2)
-x86_64-w64-mingw32-gcc -shared -fPIC -DSYSTEM=STWIN32 -I/path/to/gsl/include \
+x86_64-w64-mingw32-gcc -shared -fPIC -static-libgcc -I/path/to/gsl/include \
     stplugin.c myplugin.c -o myplugin.plugin \
-    -L/path/to/gsl/lib -lgsl -lgslcblas -lm
+    -L/path/to/gsl/lib -lgsl -lgslcblas
 ```
 
 ### 2.4 Platform Detection

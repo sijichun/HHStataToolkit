@@ -34,6 +34,11 @@ HHStataToolkit/
 ├── nwreg/                   # Nadaraya-Watson regression plugin
 │   ├── nwreg.c / .ado / .sthlp / .plugin
 │   └── README.md            # Technical documentation
+├── fangorn/                 # Decision tree / random forest plugin
+│   ├── fangorn.c / ent.c / split.c / utils_rf.c
+│   ├── ent.h / split.h / utils_rf.h
+│   ├── fangorn.ado / .sthlp / .plugin
+│   └── README.md            # Technical documentation
 ├── single_ado/              # Standalone Stata commands (no C code)
 │   ├── bprecall.ado / .sthlp
 │   ├── countdistinct.ado / .sthlp
@@ -41,6 +46,9 @@ HHStataToolkit/
 │   ├── gencatutility.ado / .sthlp
 │   └── labelvalidsample.ado / .sthlp
 └── test/                    # Test do-files
+    ├── kdensity2/           # kdensity2 tests
+    ├── nwreg/               # nwreg tests
+    └── fangorn/             # fangorn tests
 ```
 
 The `src/utils.h` and `src/utils.c` files provide reusable components (kernel functions, bandwidth selectors, Stata-C data transfer, memory helpers) for all plugins.
