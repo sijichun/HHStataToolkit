@@ -65,8 +65,10 @@ stata -e do test/fangorn/test_rf/test_fangorn_vs_sklearn_rf.do
 | **nwreg** | `varlist`(regressors) → y → target → group → result → [se] → touse |
 | **fangorn** | features → y → target → group → result → leaf_id → touse |
 
-- **target=0** training, **target=1** test/predict. All obs receive predictions.
+- **target=0** = training set, **target=1** = target/prediction set. All observations receive predictions, but only target=0 contributes to bandwidth/training. Typical use: treatment/control group analysis — train on control group (target=0), predict counterfactual density/regression for treatment group (target=1).
 - **group**: string vars auto-encoded to numeric via `egen group()` in ado layer.
+  Key advantage over official Stata commands: plugins handle multi-dimensional grouping (2+ group vars) natively.
+  Official `kdensity` only supports a single `by()` group variable and cannot use string groups directly.
 
 ---
 

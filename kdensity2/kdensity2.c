@@ -12,8 +12,12 @@
 #include "stplugin.h"
 #include "utils.h"
 
-static double kde_eval_1d(double x, double *train_data, int n_train,
-                           double h, int kernel_type)
+#ifdef USE_CUDA
+#include "kdensity2_cuda.h"
+#endif
+
+double kde_eval_1d_cpu(double x, double *train_data, int n_train,
+                       double h, int kernel_type)
 {
     kernel_1d_func K = get_kernel_1d(kernel_type);
     double sum = 0.0;
@@ -25,8 +29,8 @@ static double kde_eval_1d(double x, double *train_data, int n_train,
     return sum / (n_train * h);
 }
 
-static double kde_eval_mv(double *x, double **train_data, int n_train,
-                           int dim, double *h, int kernel_type)
+double kde_eval_mv_cpu(double *x, double **train_data, int n_train,
+                       int dim, double *h, int kernel_type)
 {
     double sum = 0.0;
     int j, d;
@@ -75,13 +79,12 @@ static void compute_bandwidth(double **train_data, int n_train, int dim,
 
 #define CV_GRID_STEP    0.05
 
-/* K-fold CV log-likelihood score for 1D KDE (larger = better) */
-static double cv_score_1d(double *data, int n, double h,
-                           int kernel_type, int k)
+double cv_score_1d_cpu(double *data, int n, double h,
+                       int kernel_type, int k)
 {
     kernel_1d_func K = get_kernel_1d(kernel_type);
     double score = 0.0;
-    int fold, i, j;
+    int fold, i;
 
     for (fold = 0; fold < k; fold++) {
         int test_start = (fold * n) / k;
@@ -91,8 +94,12 @@ static double cv_score_1d(double *data, int n, double h,
         if (train_size < 2 || test_size < 1) continue;
 
         double fold_score = 0.0;
+#ifdef _OPENMP
+#pragma omp parallel for reduction(+:fold_score)
+#endif
         for (i = test_start; i < test_end; i++) {
             double sum = 0.0;
+            int j;
             for (j = 0; j < n; j++) {
                 if (j < test_start || j >= test_end)
                     sum += K((data[i] - data[j]) / h);
@@ -104,14 +111,11 @@ static double cv_score_1d(double *data, int n, double h,
     return score / n;
 }
 
-/* K-fold CV log-likelihood score for multivariate KDE */
-static double cv_score_mv(double **data, int n, int dim, double *h,
-                           int kernel_type, int k)
+double cv_score_mv_cpu(double **data, int n, int dim, double *h,
+                       int kernel_type, int k)
 {
     double score = 0.0;
-    int fold, i, j, d;
-    double *u = (double*)malloc(dim * sizeof(double));
-    if (!u) return -1e100;
+    int fold, i, d;
 
     for (fold = 0; fold < k; fold++) {
         int test_start = (fold * n) / k;
@@ -124,49 +128,96 @@ static double cv_score_mv(double **data, int n, int dim, double *h,
         for (d = 0; d < dim; d++) h_prod *= h[d];
 
         double fold_score = 0.0;
+#ifdef _OPENMP
+#pragma omp parallel for reduction(+:fold_score)
+#endif
         for (i = test_start; i < test_end; i++) {
             double sum = 0.0;
+            int j, d;
+            double u_local[MAX_DIM];
             for (j = 0; j < n; j++) {
                 if (j >= test_start && j < test_end) continue;
                 for (d = 0; d < dim; d++)
-                    u[d] = (data[d][i] - data[d][j]) / h[d];
-                sum += kernel_product(u, dim, kernel_type);
+                    u_local[d] = (data[d][i] - data[d][j]) / h[d];
+                sum += kernel_product(u_local, dim, kernel_type);
             }
             fold_score += log(sum / (train_size * h_prod));
         }
         score += fold_score;
     }
-    free(u);
     return score / n;
 }
 
-/* Select 1D bandwidth by K-fold CV grid search */
-static double cv_select_1d(double *data, int n, int kernel_type,
-                            int k, int ngrids, double ref_h)
+static int cv_select_1d(double *data, int n, int kernel_type,
+                         int k, int ngrids, double ref_h,
+                         double *h_out, int gpu_device)
 {
-    double grid[201];  /* max 201 candidates */
+    double grid[201];
     int n_candidates;
     generate_log_grid(ref_h, CV_GRID_STEP, ngrids, grid, &n_candidates);
 
+#ifdef USE_CUDA
+    if (gpu_device >= 0) {
+        double best_h = ref_h, best_score = -1e100;
+        int i;
+        for (i = 0; i < n_candidates; i++) {
+            double score;
+            if (gpu_cv_score_1d(data, n, grid[i], kernel_type, k, &score, gpu_device) != 0) {
+                SF_error("Error: GPU cross-validation (1D) failed\n");
+                return 1;
+            }
+            if (score > best_score) {
+                best_score = score;
+                best_h = grid[i];
+            }
+        }
+        *h_out = best_h;
+        return 0;
+    }
+#endif
+
     double best_h = ref_h, best_score = -1e100;
     int i;
+#ifdef _OPENMP
+#pragma omp parallel
+    {
+        double local_best_h = ref_h;
+        double local_best_score = -1e100;
+        #pragma omp for nowait
+        for (i = 0; i < n_candidates; i++) {
+            double score = cv_score_1d_cpu(data, n, grid[i], kernel_type, k);
+            if (score > local_best_score) {
+                local_best_score = score;
+                local_best_h = grid[i];
+            }
+        }
+        #pragma omp critical
+        {
+            if (local_best_score > best_score) {
+                best_score = local_best_score;
+                best_h = local_best_h;
+            }
+        }
+    }
+#else
     for (i = 0; i < n_candidates; i++) {
-        double score = cv_score_1d(data, n, grid[i], kernel_type, k);
+        double score = cv_score_1d_cpu(data, n, grid[i], kernel_type, k);
         if (score > best_score) {
             best_score = score;
             best_h = grid[i];
         }
     }
-    return best_h;
+#endif
+    *h_out = best_h;
+    return 0;
 }
 
-/* Select multivariate bandwidth by log-scale grid search (scale all dims) */
-static void cv_select_mv(double **data, int n, int dim, int kernel_type,
-                          int k, int ngrids, double *ref_h, double *h_out)
+static int cv_select_mv(double **data, int n, int dim, int kernel_type,
+                         int k, int ngrids, double *ref_h, double *h_out,
+                         int gpu_device)
 {
-    double grid[201];  /* max 201 candidates */
+    double grid[201];
     int n_candidates;
-    /* Use the geometric mean of ref_h as the reference for the log grid */
     double log_mean = 0.0;
     int d;
     for (d = 0; d < dim; d++) log_mean += log(ref_h[d]);
@@ -177,41 +228,100 @@ static void cv_select_mv(double **data, int n, int dim, int kernel_type,
 
     double best_score = -1e100;
     double *cand_h = (double*)malloc(dim * sizeof(double));
+    if (!cand_h) {
+        SF_error("Error: Memory allocation failed for CV grid\n");
+        return 1;
+    }
     int i;
 
+#ifdef USE_CUDA
+    if (gpu_device >= 0) {
+        for (i = 0; i < n_candidates; i++) {
+            double scale = grid[i] / ref_scale;
+            for (d = 0; d < dim; d++) cand_h[d] = ref_h[d] * scale;
+            double score;
+            if (gpu_cv_score_mv(data, n, dim, cand_h, kernel_type, k, &score, gpu_device) != 0) {
+                SF_error("Error: GPU cross-validation (multivariate) failed\n");
+                free(cand_h);
+                return 1;
+            }
+            if (score > best_score) {
+                best_score = score;
+                for (d = 0; d < dim; d++) h_out[d] = cand_h[d];
+            }
+        }
+        free(cand_h);
+        return 0;
+    }
+#endif
+
+#ifdef _OPENMP
+#pragma omp parallel
+    {
+        double local_best_score = -1e100;
+        double local_best_h[MAX_DIM];
+        double local_h[MAX_DIM];
+        #pragma omp for nowait
+        for (i = 0; i < n_candidates; i++) {
+            double scale = grid[i] / ref_scale;
+            int d;
+            for (d = 0; d < dim; d++) local_h[d] = ref_h[d] * scale;
+            double score = cv_score_mv_cpu(data, n, dim, local_h, kernel_type, k);
+            if (score > local_best_score) {
+                local_best_score = score;
+                for (d = 0; d < dim; d++) local_best_h[d] = local_h[d];
+            }
+        }
+        #pragma omp critical
+        {
+            if (local_best_score > best_score) {
+                best_score = local_best_score;
+                int d;
+                for (d = 0; d < dim; d++) h_out[d] = local_best_h[d];
+            }
+        }
+    }
+#else
     for (i = 0; i < n_candidates; i++) {
-        double scale = grid[i] / ref_scale;  /* relative to reference */
+        double scale = grid[i] / ref_scale;
         for (d = 0; d < dim; d++) cand_h[d] = ref_h[d] * scale;
-        double score = cv_score_mv(data, n, dim, cand_h, kernel_type, k);
+        double score = cv_score_mv_cpu(data, n, dim, cand_h, kernel_type, k);
         if (score > best_score) {
             best_score = score;
             for (d = 0; d < dim; d++) h_out[d] = cand_h[d];
         }
     }
+#endif
     free(cand_h);
+    return 0;
 }
 
-/* Multi-purpose bandwidth selector (adds CV support) */
-static void compute_bandwidth_cv(double **train_data, int n_train, int dim,
-                                  int bandwidth_rule, double manual_h,
-                                  int cv_folds, int cv_grids, int kernel_type,
-                                  double *h)
+static int compute_bandwidth_cv(double **train_data, int n_train, int dim,
+                                 int bandwidth_rule, double manual_h,
+                                 int cv_folds, int cv_grids, int kernel_type,
+                                 double *h, int gpu_device)
 {
     if (bandwidth_rule == BANDWIDTH_CV) {
         if (dim == 1) {
             double ref_h = silverman_bandwidth(train_data[0], n_train);
-            h[0] = cv_select_1d(train_data[0], n_train, kernel_type,
-                                 cv_folds, cv_grids, ref_h);
+            return cv_select_1d(train_data[0], n_train, kernel_type,
+                                 cv_folds, cv_grids, ref_h, &h[0], gpu_device);
         } else {
             double *ref_h = (double*)malloc(dim * sizeof(double));
+            if (!ref_h) {
+                SF_error("Error: Memory allocation failed for CV bandwidth\n");
+                return 1;
+            }
             silverman_bandwidth_mv(train_data, n_train, dim, ref_h);
-            cv_select_mv(train_data, n_train, dim, kernel_type,
-                          cv_folds, cv_grids, ref_h, h);
+            int ret = cv_select_mv(train_data, n_train, dim, kernel_type,
+                                    cv_folds, cv_grids, ref_h, h, gpu_device);
             free(ref_h);
+            return ret;
         }
     } else {
         compute_bandwidth(train_data, n_train, dim,
                           bandwidth_rule, manual_h, h);
+        return 0;
     }
 }
 
@@ -287,6 +397,87 @@ static void collect_unique_groups(double **group, int n_obs, int ngroup,
     }
 }
 
+/* Evaluate density for a batch of observations using CPU or GPU.
+   Returns 0 on success, 1 on GPU error (CPU path never errors). */
+static int eval_density_batch(double **density_data, int dim,
+                               double **train_data, int n_train,
+                               double *h, int kernel_type,
+                               int *obs_indices, int n_eval,
+                               double *result, int gpu_device)
+{
+    int i, d;
+
+#ifdef USE_CUDA
+    if (gpu_device >= 0) {
+        if (dim == 1) {
+            double *x_batch = (double*)malloc(n_eval * sizeof(double));
+            double *res_batch = (double*)malloc(n_eval * sizeof(double));
+            if (!x_batch || !res_batch) {
+                free(x_batch); free(res_batch);
+                SF_error("Error: Memory allocation failed for GPU batch\n");
+                return 1;
+            }
+            for (i = 0; i < n_eval; i++)
+                x_batch[i] = density_data[0][obs_indices[i]];
+            if (gpu_kde_eval_1d(x_batch, train_data[0], n_train, n_eval,
+                                h[0], kernel_type, res_batch, gpu_device) != 0) {
+                SF_error("Error: GPU kernel density evaluation failed\n");
+                free(x_batch); free(res_batch);
+                return 1;
+            }
+            for (i = 0; i < n_eval; i++)
+                result[obs_indices[i]] = res_batch[i];
+            free(x_batch);
+            free(res_batch);
+            return 0;
+        } else {
+            double *x_batch_flat = (double*)malloc((size_t)dim * n_eval * sizeof(double));
+            double *res_batch = (double*)malloc(n_eval * sizeof(double));
+            if (!x_batch_flat || !res_batch) {
+                free(x_batch_flat); free(res_batch);
+                SF_error("Error: Memory allocation failed for GPU batch\n");
+                return 1;
+            }
+            for (i = 0; i < n_eval; i++)
+                for (d = 0; d < dim; d++)
+                    x_batch_flat[d * n_eval + i] = density_data[d][obs_indices[i]];
+            if (gpu_kde_eval_mv(x_batch_flat, train_data, n_train, n_eval,
+                                dim, h, kernel_type, res_batch, gpu_device) != 0) {
+                SF_error("Error: GPU multivariate kernel density evaluation failed\n");
+                free(x_batch_flat); free(res_batch);
+                return 1;
+            }
+            for (i = 0; i < n_eval; i++)
+                result[obs_indices[i]] = res_batch[i];
+            free(x_batch_flat);
+            free(res_batch);
+            return 0;
+        }
+    }
+#else
+    (void)gpu_device;
+#endif
+
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (i = 0; i < n_eval; i++) {
+        int j = obs_indices[i];
+        if (dim == 1) {
+            result[j] = kde_eval_1d_cpu(density_data[0][j],
+                                         train_data[0], n_train,
+                                         h[0], kernel_type);
+        } else {
+            double *x = (double*)malloc(dim * sizeof(double));
+            for (d = 0; d < dim; d++) x[d] = density_data[d][j];
+            result[j] = kde_eval_mv_cpu(x, train_data, n_train,
+                                         dim, h, kernel_type);
+            free(x);
+        }
+    }
+    return 0;
+}
+
 STDLL stata_call(int argc, char *argv[])
 {
     UTILS_OMP_SET_NTHREADS();
@@ -296,6 +487,7 @@ STDLL stata_call(int argc, char *argv[])
     double manual_h = -1.0;
     int cv_folds = 0;
     int cv_grids = 10;
+    int gpu_device = -1;
 
     int ndensity = -1;
     int ntarget = 0;
@@ -345,8 +537,30 @@ STDLL stata_call(int argc, char *argv[])
         else if (extract_option_value(arg, "ngrids", buf, sizeof(buf))) {
             cv_grids = atoi(buf);
             if (cv_grids < 2) cv_grids = 2;
+            if (cv_grids > 100) cv_grids = 100;  /* protect fixed grid[201] buffer */
+        }
+        else if (extract_option_value(arg, "gpu", buf, sizeof(buf))) {
+            gpu_device = atoi(buf);
         }
     }
+
+#ifdef USE_CUDA
+    if (gpu_device >= 0) {
+        int preflight = gpu_preflight_check(gpu_device, 0);
+        if (preflight != 0) {
+            char buf[128];
+            switch (preflight) {
+                case -1: snprintf(buf, sizeof(buf), "Error: No CUDA devices found\n"); break;
+                case -2: snprintf(buf, sizeof(buf), "Error: Invalid GPU device ID (%d)\n", gpu_device); break;
+                case -3: snprintf(buf, sizeof(buf), "Error: GPU compute capability < 6.0 not supported\n"); break;
+                case -4: snprintf(buf, sizeof(buf), "Error: Insufficient GPU memory\n"); break;
+                default: snprintf(buf, sizeof(buf), "Error: GPU preflight check failed (code %d)\n", preflight); break;
+            }
+            SF_error(buf);
+            return 1;
+        }
+    }
+#endif
 
     ST_int n_vars = SF_nvar();
     ST_int n_obs  = SF_nobs();
@@ -358,6 +572,12 @@ STDLL stata_call(int argc, char *argv[])
     }
 
     int dim = ndensity;
+    if (dim > MAX_DIM) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Error: Too many density variables (max %d)\n", MAX_DIM);
+        SF_error(buf);
+        return 1;
+    }
 
     int idx_target_start = ndensity + 1;
     int idx_group_start  = ndensity + ntarget + 1;
@@ -395,7 +615,6 @@ STDLL stata_call(int argc, char *argv[])
     }
 
     int j;
-    /* Initialize result with Stata missing values */
     for (j = 0; j < n_obs; j++) result[j] = SV_missval;
 
     int n_eff = 0;
@@ -471,7 +690,14 @@ STDLL stata_call(int argc, char *argv[])
             if (n_train_g < 2) continue;
 
             double **train_data = alloc_double_matrix(dim, n_train_g);
-            if (!train_data) continue;
+            if (!train_data) {
+                SF_error("Error: Memory allocation failed\n");
+                free_unique_groups(ug);
+                free(in_if); free_matrix(density_data, dim);
+                free(target); free_matrix(group, ngroup);
+                free(result);
+                return 1;
+            }
 
             int idx = 0;
             for (j = 0; j < n_obs; j++) {
@@ -486,26 +712,64 @@ STDLL stata_call(int argc, char *argv[])
             }
 
             double *h = (double*)malloc(dim * sizeof(double));
-            compute_bandwidth_cv(train_data, n_train_g, dim,
-                                  bandwidth_rule, manual_h,
-                                  cv_folds, cv_grids, kernel_type, h);
+            if (!h) {
+                SF_error("Error: Memory allocation failed for bandwidth vector\n");
+                free_matrix(train_data, dim);
+                free_unique_groups(ug);
+                free(in_if); free_matrix(density_data, dim);
+                free(target); free_matrix(group, ngroup);
+                free(result);
+                return 1;
+            }
+            if (compute_bandwidth_cv(train_data, n_train_g, dim,
+                                      bandwidth_rule, manual_h,
+                                      cv_folds, cv_grids, kernel_type, h,
+                                      gpu_device) != 0) {
+                free(h);
+                free_matrix(train_data, dim);
+                free_unique_groups(ug);
+                free(in_if); free_matrix(density_data, dim);
+                free(target); free_matrix(group, ngroup);
+                free(result);
+                return 1;
+            }
 
+            int n_eval_g = 0;
             for (j = 0; j < n_obs; j++) {
-                if (in_if[j] &&
-                    match_group_combo(group, ngroup, j, ug->values[i])) {
-                    if (dim == 1) {
-                        result[j] = kde_eval_1d(density_data[0][j],
-                                                 train_data[0], n_train_g,
-                                                 h[0], kernel_type);
-                    } else {
-                        double *x = (double*)malloc(dim * sizeof(double));
-                        int d;
-                        for (d = 0; d < dim; d++) x[d] = density_data[d][j];
-                        result[j] = kde_eval_mv(x, train_data, n_train_g,
-                                                 dim, h, kernel_type);
-                        free(x);
-                    }
+                if (in_if[j] && match_group_combo(group, ngroup, j, ug->values[i]))
+                    n_eval_g++;
+            }
+
+            int *eval_indices = (int*)malloc(n_eval_g * sizeof(int));
+            if (!eval_indices) {
+                SF_error("Error: Memory allocation failed\n");
+                free(h);
+                free_matrix(train_data, dim);
+                free_unique_groups(ug);
+                free(in_if); free_matrix(density_data, dim);
+                free(target); free_matrix(group, ngroup);
+                free(result);
+                return 1;
+            }
+            {
+                int ei = 0;
+                for (j = 0; j < n_obs; j++) {
+                    if (in_if[j] && match_group_combo(group, ngroup, j, ug->values[i]))
+                        eval_indices[ei++] = j;
                 }
+                if (eval_density_batch(density_data, dim, train_data, n_train_g,
+                                       h, kernel_type, eval_indices, n_eval_g,
+                                       result, gpu_device) != 0) {
+                    free(eval_indices);
+                    free(h);
+                    free_matrix(train_data, dim);
+                    free_unique_groups(ug);
+                    free(in_if); free_matrix(density_data, dim);
+                    free(target); free_matrix(group, ngroup);
+                    free(result);
+                    return 1;
+                }
+                free(eval_indices);
             }
 
             free(h);
@@ -552,25 +816,58 @@ STDLL stata_call(int argc, char *argv[])
         }
 
         double *h = (double*)malloc(dim * sizeof(double));
-        compute_bandwidth_cv(train_data, n_train, dim,
-                               bandwidth_rule, manual_h,
-                               cv_folds, cv_grids, kernel_type, h);
+        if (!h) {
+            SF_error("Error: Memory allocation failed for bandwidth vector\n");
+            free_matrix(train_data, dim);
+            free(in_if); free_matrix(density_data, dim);
+            free(target); free_matrix(group, ngroup);
+            free(result);
+            return 1;
+        }
+        if (compute_bandwidth_cv(train_data, n_train, dim,
+                                  bandwidth_rule, manual_h,
+                                  cv_folds, cv_grids, kernel_type, h,
+                                  gpu_device) != 0) {
+            free(h);
+            free_matrix(train_data, dim);
+            free(in_if); free_matrix(density_data, dim);
+            free(target); free_matrix(group, ngroup);
+            free(result);
+            return 1;
+        }
 
+        int n_eval = 0;
         for (j = 0; j < n_obs; j++) {
-            if (in_if[j]) {
-                if (dim == 1) {
-                    result[j] = kde_eval_1d(density_data[0][j],
-                                             train_data[0], n_train,
-                                             h[0], kernel_type);
-                } else {
-                    double *x = (double*)malloc(dim * sizeof(double));
-                    int d;
-                    for (d = 0; d < dim; d++) x[d] = density_data[d][j];
-                    result[j] = kde_eval_mv(x, train_data, n_train,
-                                             dim, h, kernel_type);
-                    free(x);
-                }
+            if (in_if[j]) n_eval++;
+        }
+
+        int *eval_indices = (int*)malloc(n_eval * sizeof(int));
+        if (!eval_indices) {
+            SF_error("Error: Memory allocation failed\n");
+            free(h);
+            free_matrix(train_data, dim);
+            free(in_if); free_matrix(density_data, dim);
+            free(target); free_matrix(group, ngroup);
+            free(result);
+            return 1;
+        }
+        {
+            int ei = 0;
+            for (j = 0; j < n_obs; j++) {
+                if (in_if[j]) eval_indices[ei++] = j;
             }
+            if (eval_density_batch(density_data, dim, train_data, n_train,
+                                   h, kernel_type, eval_indices, n_eval,
+                                   result, gpu_device) != 0) {
+                free(eval_indices);
+                free(h);
+                free_matrix(train_data, dim);
+                free(in_if); free_matrix(density_data, dim);
+                free(target); free_matrix(group, ngroup);
+                free(result);
+                return 1;
+            }
+            free(eval_indices);
         }
 
         free(h);

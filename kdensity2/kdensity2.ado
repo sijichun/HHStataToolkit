@@ -19,6 +19,7 @@ program define kdensity2, rclass
            MINcount(integer 0) ///
            FOLDS(integer 10) ///
            GRIDs(integer 10) ///
+           GPU(integer -1) ///
            IF(string) IN(string) ]
     
     /* Create touse marker from if/in option */
@@ -123,16 +124,36 @@ program define kdensity2, rclass
     local plugin_vars "`plugin_vars' `gen_var'"
     local plugin_vars "`plugin_vars' `touse'"
     
-    /* Load plugin (capture avoids "already defined" on repeated calls) */
-    local plugin_path "kdensity2/kdensity2.plugin"
-    capture findfile kdensity2.plugin
-    if _rc capture findfile p/kdensity2.plugin
-    if _rc capture findfile kdensity2/kdensity2.plugin
-    if !_rc local plugin_path "`r(fn)'"
-    * Expand ~ to full path (plugin using() doesn't handle tilde)
-    local homedir : env HOME
-    local plugin_path = subinstr("`plugin_path'", "~", "`homedir'", .)
-    capture program _kdensity2_plugin, plugin using("`plugin_path'")
+    if `gpu' < -1 {
+        display as error "gpu() must be -1 (CPU mode) or >= 0 (GPU device)"
+        exit 198
+    }
+    
+    capture program drop _kdensity2_plugin
+    if `gpu' >= 0 {
+        local plugin_path "kdensity2/kdensity2_cuda.plugin"
+        capture findfile kdensity2_cuda.plugin
+        if _rc capture findfile p/kdensity2_cuda.plugin
+        if _rc capture findfile kdensity2/kdensity2_cuda.plugin
+        if !_rc local plugin_path "`r(fn)'"
+        local homedir : env HOME
+        local plugin_path = subinstr("`plugin_path'", "~", "`homedir'", .)
+        capture program _kdensity2_plugin, plugin using("`plugin_path'")
+        if _rc {
+            display as error "kdensity2_cuda.plugin not found. Run 'make kdensity2_cuda' first."
+            exit 111
+        }
+    }
+    else {
+        local plugin_path "kdensity2/kdensity2.plugin"
+        capture findfile kdensity2.plugin
+        if _rc capture findfile p/kdensity2.plugin
+        if _rc capture findfile kdensity2/kdensity2.plugin
+        if !_rc local plugin_path "`r(fn)'"
+        local homedir : env HOME
+        local plugin_path = subinstr("`plugin_path'", "~", "`homedir'", .)
+        capture program _kdensity2_plugin, plugin using("`plugin_path'")
+    }
     
     /* Build options for plugin */
     local plugin_args "kernel(`kernel_opt')"
@@ -143,6 +164,7 @@ program define kdensity2, rclass
     local plugin_args "`plugin_args' minobs(`mincount')"
     local plugin_args "`plugin_args' nfolds(`folds')"
     local plugin_args "`plugin_args' ngrids(`grids')"
+    local plugin_args "`plugin_args' gpu(`gpu')"
     
     /* If CV bandwidth: shuffle data order for randomized folds */
     local is_cv = ("`bw_opt'" == "cv")
@@ -168,6 +190,9 @@ program define kdensity2, rclass
     return local kernel "`kernel_opt'"
     return local bw_method "`bw_opt'"
     return local groupvars "`group'"
+    if `gpu' >= 0 {
+        return scalar gpu_device = `gpu'
+    }
     
     /* Display results */
     display as text _n "Kernel density estimation"
@@ -184,6 +209,9 @@ program define kdensity2, rclass
     display as text "Observations: " as result r(N)
     display as text "Kernel:       " as result "`kernel_opt'"
     display as text "Bandwidth:    " as result "`bw_opt'"
+    if `gpu' >= 0 {
+        display as text "GPU device:   " as result `gpu'
+    }
     display as text "{hline 40}"
     
     /* Label variable */

@@ -7,8 +7,8 @@ decision trees, written in C. Includes standalone utility commands.
 
 | Plugin | Description | Key Features |
 |--------|-------------|--------------|
-| **kdensity2** | Kernel density estimation | 1D/MV, target split, multi-group, product kernel, CV bandwidth |
-| **nwreg** | Nadaraya-Watson kernel regression | 1D/MV, target split, multi-group, CV bandwidth, robust SE |
+| **kdensity2** | Kernel density estimation | 1D/MV, target split (train/predict), multi-group, product kernel, CV bandwidth |
+| **nwreg** | Nadaraya-Watson kernel regression | 1D/MV, target split (train/predict), multi-group, CV bandwidth, robust SE |
 | **fangorn** | CART decision tree / random forest | Gini/Entropy/MSE, pre-sorted splits, CV depth selection, OOB error, MDI importance, mtry, Mermaid export |
 
 ## Standalone Utilities
@@ -21,6 +21,21 @@ decision trees, written in C. Includes standalone utility commands.
 | **gen_init_var** | Initialize panel variable by carrying forward a base-year value |
 | **gencatutility** | Compute continuous utility scores for categorical variables |
 | **labelvalidsample** | Create binary marker for complete-case observations |
+
+## Core Features
+
+### Target Split (Training / Prediction)
+
+All estimation plugins (`kdensity2`, `nwreg`, `fangorn`) support a **target split** via the `target(varname)` option:
+
+- **target=0** = **training set** — these observations contribute to bandwidth selection / model training
+- **target=1** = **target/prediction set** — these observations receive predictions but do NOT influence training
+
+This is particularly useful for **treatment/control analysis**: train on the control group (`target=0`), then predict the counterfactual density or regression outcome for the treatment group (`target=1`). Both groups receive estimates, but bandwidths and model parameters are determined solely by the training set.
+
+### Group Variable Handling
+
+An advantage over official Stata commands: `kdensity2` and `nwreg` handle **multi-dimensional grouping** natively (2+ group variables). Official `kdensity` only supports a single `by()` group variable and cannot use string group variables directly. In this toolkit, string group variables are auto-encoded to numeric via `egen group()` in the ado layer.
 
 ## Project Structure
 
@@ -68,6 +83,12 @@ stata -e do test/fangorn/test_fangorn_phase1.do
 stata -e do test/fangorn/test_fangorn_phase2.do
 stata -e do test/csa/test_csadensity.do
 ```
+
+## Development
+
+This project was developed with AI-assisted tooling:
+- **Orchestration**: [OpenCode](https://github.com/OhMyOpenCode/oh-my-opencode) + Oh-My-OpenAgent
+- **Models**: kimi-for-coding (frontend/reasoning) + DeepSeek V4 Flash (backend/execution)
 
 ## Platform Support
 

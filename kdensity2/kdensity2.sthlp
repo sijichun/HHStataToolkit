@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 2.3.0  07may2026}{...}
+{* *! version 2.4.0  10may2026}{...}
 {cmd:help kdensity2}{right: ({stata "viewsource kdensity2/kdensity2.ado":view source})}
 {hline}
 
@@ -24,6 +24,7 @@
 {synopt :{opt target(varname)}}0/1 variable: 0=training, 1=test{p_end}
 {synopt :{opt group(varlist)}}one or more grouping variables{p_end}
 {synopt :{opt mincount(#)}}skip groups with fewer than # observations{p_end}
+{synopt :{opt gpu(int)}}GPU device ID for acceleration{p_end}
 {synopt :{opt folds(#)}}CV folds (used with {cmd:bw(cv)}); default is 10{p_end}
 {synopt :{opt grids(#)}}CV grid candidates per side; default is 10{p_end}
 {synopt :{opt gen:erate(newvar)}}output variable; default is {cmd:kdensity2}{p_end}
@@ -69,6 +70,21 @@ log-spaced with step 0.05.
 {phang}{opt if(exp)}: use {cmd:if(exp)} syntax (not Stata qualifier) to avoid
 a Stata 18 parsing bug.
 
+{phang}{opt gpu(int)}: use GPU device for acceleration.  {it:int} specifies
+the GPU device ID (0, 1, 2, ...).  Requires {bf:kdensity2_cuda.plugin} built
+via {cmd:make kdensity2_cuda}.
+
+{pstd}{bf:Note:} GPU acceleration is only available on Linux with a
+CUDA-capable GPU and compatible NVIDIA driver.
+
+{pstd}{bf:Warning:} If {opt gpu()} is specified but the CUDA plugin is not
+available, an error is returned.  There is no automatic fallback to CPU.
+
+{pstd}{bf:Technical note:} Due to differences in floating-point reduction
+order, GPU and CPU results may differ by approximately 1e-7 for density
+values and 1e-6 for CV scores.  This is normal and does not affect
+statistical validity.
+
 {marker examples}{...}
 {title:Examples}
 
@@ -78,6 +94,12 @@ a Stata 18 parsing bug.
 {phang2}{cmd:. kdensity2 x, generate(d) if(flag==1)}{p_end}
 {phang2}{cmd:. kdensity2 x, group(g) mincount(50)}{p_end}
 {phang2}{cmd:. kdensity2 x y, group(g1 g2) target(t)}{p_end}
+
+{pstd}Use GPU device 0 for acceleration:{p_end}
+{phang2}{cmd:. kdensity2 x, generate(f) gpu(0)}{p_end}
+
+{pstd}Use GPU device 1 for bivariate estimation:{p_end}
+{phang2}{cmd:. kdensity2 x y, generate(f) gpu(1)}{p_end}
 
 {marker also_see}{...}
 {title:Also see}

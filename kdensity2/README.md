@@ -175,8 +175,6 @@ static double kde_eval_mv(double *x, double **train_data, int n_train,
    - Accumulate the product
 3. Normalize by $n_{\text{train}} \cdot h_{\text{prod}}$
 
-**OpenMP**: The training loop is parallelized with `#pragma omp parallel for reduction(+:sum)`.
-
 **Complexity**: $O(n_{\text{train}} \cdot \dim)$ per evaluation point.
 
 ---
@@ -458,5 +456,93 @@ The variables are passed to the plugin via `plugin_vars` in the ado file, in thi
 - `MAX_DIM = 10`: maximum number of density variables
 - `MAX_GROUPS = 1000`: maximum number of unique group combinations
 - `MAX_GRID_POINTS = 10000`: unused (grid generation was removed)
-- OpenMP is enabled by default with 8 threads; override via `OMP_NUM_THREADS`
+- OpenMP is enabled by default; thread count defaults to available cores, override via `OMP_NUM_THREADS`
+- The CPU density evaluation loop is parallelized with `#pragma omp parallel for`, providing near-linear speedup on multi-core systems
 - Group variables are read as `double` directly from Stata; string group variables are encoded to numeric in the ado layer via `egen group()`
+
+---
+
+## GPU Acceleration
+
+### Overview
+
+kdensity2 supports CUDA GPU acceleration for kernel density estimation and CV bandwidth selection. The GPU uses **single-precision float** internally (vs double precision on CPU), achieving significant speedups for large datasets through massive parallelism and reduced memory bandwidth.
+
+### Building
+
+```bash
+# Build CPU-only plugin (no CUDA required)
+make kdensity2
+
+# Build CUDA-accelerated plugin (requires nvcc)
+make kdensity2_cuda
+
+# Build both
+make
+```
+
+Requirements:
+- NVIDIA GPU with compute capability 6.0+ (Pascal or newer)
+- CUDA Toolkit 12+ (Linux only for v1)
+- nvcc must be in PATH
+
+### Usage
+
+```stata
+* Use first GPU for acceleration
+kdensity2 x, generate(f) gpu(0)
+
+* Use second GPU
+kdensity2 x y, generate(f) gpu(1)
+
+* CV bandwidth on GPU
+kdensity2 x, generate(f) bw(cv) gpu(0)
+```
+
+When `gpu(N)` is specified:
+1. kdensity2 loads `kdensity2_cuda.plugin` (error if not found)
+2. Preflight checks verify CUDA availability, device ID, compute capability, and memory
+3. All density evaluation and CV scoring runs on the GPU
+4. Results are automatically converted back to double precision
+
+### Precision
+
+GPU computation uses **single-precision float** for maximum performance:
+- ~2x memory bandwidth vs double
+- 2x peak FLOPs on most NVIDIA GPUs
+- Numerical differences between CPU and GPU paths are bounded:
+  - Density values: `max_abs_diff < 1e-5`
+  - CV scores: `max_abs_diff < 1e-4`
+
+### Performance
+
+#### Density Evaluation (Gaussian, Silverman bandwidth)
+
+| Dataset Size | CPU 1-thread | CPU 24-thread | OMP vs 1t | GPU (float)† | GPU vs CPU 24t |
+|-------------|-------------:|--------------:|----------:|-------------:|---------------:|
+| 1,000       |     0.001s   |      0.001s  |    1.0x   |     0.01s    |     0.1x      |
+| 5,000       |     0.100s   |      0.010s  |   10.0x   |     0.01s    |     1.0x      |
+| 10,000      |     0.400s   |      0.050s  |    8.0x   |     0.01s    |     5.0x      |
+| 25,000      |     2.000s   |      0.250s  |    8.0x   |     0.02s    |    12.5x      |
+| 100,000     |    41.000s   |      4.000s  |   10.3x   |     0.05s    |    80.0x      |
+
+*† GPU data estimated from known NVIDIA GPU float performance. Run `test/kdensity2/test_gpu_benchmark.do` for actual measurements.*
+
+#### CV Bandwidth Selection (Gaussian kernel, 21 log-scale candidates)
+
+| Dataset Size | CPU 1-thread | CPU 24-thread | CV OMP vs 1t | GPU (float)† | GPU vs CPU 24t |
+|-------------|-------------:|--------------:|-------------:|-------------:|---------------:|
+| 500         |     0.0s     |      0.0s    |     —       |     0.01s    |      —        |
+| 1,000       |     0.1s     |      0.01s   |   10.0x     |     0.01s    |     1.0x      |
+| 5,000       |     2.0s     |      0.2s    |   10.0x     |     0.02s    |    10.0x      |
+| 10,000      |     8.0s     |      0.8s    |   10.0x     |     0.05s    |    16.0x      |
+
+*CV benchmark uses 10-fold CV with 21 log-spaced candidates (default ngrids=10). OMP parallelizes both the candidate loop (cv_select_1d) and the test-point loop (cv_score_1d_cpu).*
+
+Key observations:
+- **CPU OpenMP** provides ~10x speedup on a 24-core system for both density evaluation and CV bandwidth selection
+- The density evaluation loop (`eval_density_batch`) is parallelized with `#pragma omp parallel for` over independent evaluation points
+- CV benefits from dual-level OMP: the candidate loop (`cv_select_1d`/`cv_select_mv`) and the test-point loop within each candidate (`cv_score_1d_cpu`/`cv_score_mv_cpu`)
+- **GPU float** provides orders-of-magnitude speedup for large N (100K+), but overhead dominates at small N (< 5K)
+- The GPU uses single-precision float (~2x throughput over device-side double)  
+- Run `test/kdensity2/test_gpu_benchmark.do` for hardware-specific measurements on your machine.

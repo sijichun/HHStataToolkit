@@ -12,7 +12,7 @@
 #   make install      - Install all plugins to ~/ado/plus/
 
 # Shared source files (under src/)
-COMMON_SRC = src/stplugin.c src/utils.c
+COMMON_SRC = src/stplugin.c src/utils.c src/ols.c
 
 # Plugin subdirectories (single-file plugins)
 PLUGINS = kdensity2 nwreg
@@ -28,44 +28,88 @@ UNAME_S := $(shell uname -s)
 CC = gcc
 CFLAGS = -O3 -Wall -Isrc -fopenmp
 LDFLAGS = -lm -fopenmp
+BLAS_LIBS = -lopenblas
 
-# Platform-specific flags
-ifeq ($(UNAME_S),Linux)
+# CUDA settings (optional)
+NVCC := $(shell which nvcc 2>/dev/null)
+CUDA_ARCH ?= sm_60
+CUDA_FLAGS = -shared -Xcompiler -fPIC -arch=$(CUDA_ARCH) -Isrc -DUSE_CUDA -DSYSTEM=OPUNIX
+
+# Windows OpenBLAS static-link settings (override as needed)
+# Example:
+#   make OS=Windows_NT OPENBLAS_DIR=/opt/mingw-openblas
+OPENBLAS_DIR ?= /usr/x86_64-w64-mingw32
+OPENBLAS_INC ?= $(OPENBLAS_DIR)/include
+OPENBLAS_LIB ?= $(OPENBLAS_DIR)/lib
+WINDOWS_OPENBLAS_STATIC_LIBS ?= -Wl,-Bstatic -lopenblas -lgfortran -lquadmath -lgomp -lwinpthread -Wl,-Bdynamic -lm
+
+# Platform-specific flags (mutually exclusive)
+ifeq ($(OS),Windows_NT)
+    CC = x86_64-w64-mingw32-gcc
+    # Note: -DSYSTEM=STWIN32 not needed; stplugin.h defaults to STWIN32
+    CFLAGS += -shared -fPIC -O3 -Wall -Isrc -I$(OPENBLAS_INC)
+    # Static-link OpenBLAS and MinGW runtime deps so the plugin works
+    # without a separate OpenBLAS install on the target Windows machine.
+    LDFLAGS = -fopenmp -static-libgcc -static -L$(OPENBLAS_LIB)
+    BLAS_LIBS = $(WINDOWS_OPENBLAS_STATIC_LIBS)
+    PLUGIN_EXT = .plugin
+else ifeq ($(UNAME_S),Linux)
     CFLAGS += -shared -fPIC -DSYSTEM=OPUNIX
     PLUGIN_EXT = .plugin
-endif
-
-ifeq ($(UNAME_S),Darwin)
+else ifeq ($(UNAME_S),Darwin)
     CC = clang
     CFLAGS += -bundle -DSYSTEM=APPLEMAC
     PLUGIN_EXT = .plugin
 endif
 
-ifeq ($(OS),Windows_NT)
-    CC = x86_64-w64-mingw32-gcc
-    # Note: -DSYSTEM=STWIN32 not needed; stplugin.h defaults to STWIN32
-    CFLAGS += -shared -fPIC -O3 -Wall -Isrc
-    # Static-link GCC runtime to avoid DLL dependency issues in Stata
-    LDFLAGS = -fopenmp -static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic
-    PLUGIN_EXT = .plugin
+# Build targets
+.PHONY: all clean install dist help check-openblas $(PLUGINS) fangorn kdensity2_cuda
+
+CUDA_TARGETS :=
+ifneq ($(NVCC),)
+CUDA_TARGETS += kdensity2_cuda
 endif
 
-# Build targets
-.PHONY: all clean install dist help $(PLUGINS) fangorn
+check-openblas:
+ifeq ($(UNAME_S),Linux)
+ifneq ($(OS),Windows_NT)
+	@pkg-config --exists openblas 2>/dev/null || ldconfig -p 2>/dev/null | grep -q libopenblas || { \
+		echo ""; \
+		echo "Error: OpenBLAS not found."; \
+		echo "Install with:"; \
+		echo "  Debian/Ubuntu:  sudo apt install libopenblas-dev"; \
+		echo "  RHEL/Fedora:    sudo dnf install openblas-devel"; \
+		echo "  Arch:           sudo pacman -S openblas"; \
+		echo ""; \
+		exit 1; \
+	}
+endif
+endif
 
-all: $(PLUGINS) fangorn
+all: $(PLUGINS) fangorn $(CUDA_TARGETS)
 
 # Generic plugin build rule (for single-file plugins)
-$(PLUGINS):
+$(PLUGINS): check-openblas
 	@echo "Building $@..."
-	$(CC) $(CFLAGS) $(COMMON_SRC) $@/$@.c -o $@/$@$(PLUGIN_EXT) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(COMMON_SRC) $@/$@.c -o $@/$@$(PLUGIN_EXT) $(LDFLAGS) $(BLAS_LIBS)
 	@echo "$@ build complete."
 
 # Special rule for fangorn (multiple source files)
-fangorn: $(PLUGINS)
+fangorn: check-openblas $(PLUGINS)
 	@echo "Building fangorn..."
-	$(CC) $(CFLAGS) $(COMMON_SRC) fangorn/fangorn.c fangorn/ent.c fangorn/split.c fangorn/utils_rf.c -o fangorn/fangorn.plugin $(LDFLAGS)
+	$(CC) $(CFLAGS) $(COMMON_SRC) fangorn/fangorn.c fangorn/ent.c fangorn/split.c fangorn/utils_rf.c -o fangorn/fangorn.plugin $(LDFLAGS) $(BLAS_LIBS)
 	@echo "fangorn build complete."
+
+# CUDA-accelerated kdensity2 plugin (requires nvcc)
+kdensity2_cuda:
+ifeq ($(NVCC),)
+	@echo "Error: nvcc not found; cannot build kdensity2_cuda."
+	@exit 1
+else
+	@echo "Building kdensity2_cuda..."
+	$(NVCC) $(CUDA_FLAGS) $(COMMON_SRC) kdensity2/kdensity2.c kdensity2/kdensity2_cuda.cu -o kdensity2/kdensity2_cuda.plugin -lm -lcudart_static -lpthread -ldl
+	@echo "kdensity2_cuda build complete (cudart statically linked)."
+endif
 
 # Clean all plugins
 clean:
@@ -75,11 +119,14 @@ clean:
 	done
 	@echo "Cleaning fangorn..."
 	@rm -f fangorn/fangorn.plugin
+	@echo "Cleaning kdensity2_cuda..."
+	@rm -f kdensity2/kdensity2_cuda.plugin
 	@rm -rf ado/plus
 
 # Install: .plugin → ~/ado/plus/, .ado/.sthlp → ~/ado/plus/<letter>/
 install: all
-	@echo "Installing to ~/ado/plus/..."
+	@echo "Installing to ~/ado/plus/"
+	@mkdir -p ~/ado/plus
 	@for p in $(PLUGINS); do \
 		letter=$$(echo $$p | cut -c1); \
 		cp $$p/$$p.plugin ~/ado/plus/ 2>/dev/null || true; \
@@ -91,6 +138,11 @@ install: all
 	@cp fangorn/fangorn.plugin ~/ado/plus/ 2>/dev/null || true
 	@mkdir -p ~/ado/plus/f && cp fangorn/fangorn.ado ~/ado/plus/f/ 2>/dev/null || true
 	@echo "  Installed fangorn"
+ifneq ($(wildcard kdensity2/kdensity2_cuda.plugin),)
+	@echo "Installing kdensity2_cuda..."
+	@cp kdensity2/kdensity2_cuda.plugin ~/ado/plus/ 2>/dev/null || true
+	@echo "  Installed kdensity2_cuda"
+endif
 	@echo "Installing single_ado files..."
 	@for f in $(SINGLE_ADO_FILES); do \
 		base=$$(basename $$f .ado); \
@@ -120,6 +172,11 @@ dist: all
 	@cp fangorn/fangorn.plugin ado/plus/ 2>/dev/null || true
 	@mkdir -p ado/plus/f && cp fangorn/fangorn.ado ado/plus/f/ 2>/dev/null || true
 	@echo "  Packaged fangorn"
+ifneq ($(wildcard kdensity2/kdensity2_cuda.plugin),)
+	@echo "Packaging kdensity2_cuda..."
+	@cp kdensity2/kdensity2_cuda.plugin ado/plus/ 2>/dev/null || true
+	@echo "  Packaged kdensity2_cuda"
+endif
 	@echo "Packaging single_ado files..."
 	@for f in $(SINGLE_ADO_FILES); do \
 		base=$$(basename $$f .ado); \
@@ -139,31 +196,11 @@ help:
 	@echo "Targets:"
 	@echo "  all          - Build all plugins (default)"
 	@echo "  kdensity2    - Build kdensity2 plugin only"
+	@echo "  kdensity2_cuda - Build kdensity2 with CUDA acceleration (requires nvcc)"
 	@echo "  clean        - Remove all built files"
 	@echo "  install      - Install all plugins (and single_ado) to ~/ado/plus/"
 	@echo "  dist         - Package plugins (and single_ado) to ado/ directory"
 	@echo "  help         - Show this help"
 	@echo ""
-	@echo "Project layout:"
-	@echo "  HHStataToolkit/"
-	@echo "    ├── src/"
-	@echo "    │     ├── stplugin.h, utils.h"
-	@echo "    │     └── stplugin.c, utils.c"
-	@echo "    ├── Makefile"
-	@echo "    ├── kdensity2/"
-	@echo "    │     ├── kdensity2.c / kdensity2.ado"
-	@echo "    ├── nwreg/"
-	@echo "    │     ├── nwreg.c / nwreg.ado"
-	@echo "    └── single_ado/"
-	@echo "          ├── bprecall.ado"
-	@echo "          ├── countdistinct.ado"
-	@echo "          ├── gen_init_var.ado"
-	@echo "          ├── gencatutility.ado"
-	@echo "          └── labelvalidsample.ado"
-	@echo ""
-	@echo "To add a new plugin:"
-	@echo "  1. mkdir myplugin && create myplugin.c / myplugin.ado"
-	@echo "  2. Add 'myplugin' to PLUGINS in this Makefile"
-	@echo "  3. make myplugin"
-	@echo ""
 	@echo "Platform: $(UNAME_S)"
+	@echo "CUDA arch: $(CUDA_ARCH) (if nvcc available)"

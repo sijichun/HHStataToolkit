@@ -4,3 +4,12 @@
 ado/
 *.zip
 test/*.md
+.sisyphus/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.dta
+TODO.md

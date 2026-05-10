@@ -230,6 +230,7 @@ double** stata_to_c_matrix(ST_int n_vars, ST_int *n_rows)
 void free_matrix(double **matrix, int n_vars)
 {
     int i;
+    if (!matrix) return;
     for (i = 0; i < n_vars; i++) {
         if (matrix[i]) free(matrix[i]);
     }

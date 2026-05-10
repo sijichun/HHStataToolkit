@@ -15,6 +15,12 @@
 #include "utils.h"
 
 /* ============================================================================
+ * Denominator Tolerance
+ * ============================================================================ */
+
+#define NW_DENOM_TOL 1e-3
+
+/* ============================================================================
  * Nadaraya-Watson Estimator
  * ============================================================================ */
 
@@ -35,7 +41,7 @@ static double nw_eval_1d(double x, double *train_x, double *train_y,
         num += w * train_y[i];
         den += w;
     }
-    if (den == 0.0) return SV_missval;
+    if (den < NW_DENOM_TOL) return SV_missval;
     return num / den;
 }
 
@@ -61,7 +67,7 @@ static double nw_eval_mv(double *x, double **train_x, double *train_y,
         den += w;
     }
 
-    if (den == 0.0) return SV_missval;
+    if (den < NW_DENOM_TOL) return SV_missval;
     return num / den;
 }
 
@@ -107,7 +113,7 @@ static void compute_se_residuals_1d(double *train_x, double *train_y,
             num += w * train_y[j];
             den += w;
         }
-        if (den == 0.0) {
+        if (den < NW_DENOM_TOL) {
             se_resid[i] = 0.0;
             continue;
         }
@@ -118,7 +124,7 @@ static void compute_se_residuals_1d(double *train_x, double *train_y,
             se_resid[i] = raw_resid;
         } else if (se_type == 1) {
             double den_loo = den - K0;
-            if (den_loo <= 0.0) {
+            if (den_loo < NW_DENOM_TOL) {
                 se_resid[i] = raw_resid;
             } else {
                 double num_loo = num - K0 * train_y[i];
@@ -128,7 +134,7 @@ static void compute_se_residuals_1d(double *train_x, double *train_y,
         } else {
             double leverage = K0 / den;
             double adj = 1.0 - leverage;
-            if (adj > 1e-12) {
+            if (adj > NW_DENOM_TOL) {
                 se_resid[i] = raw_resid / adj;
             } else {
                 se_resid[i] = raw_resid;
@@ -158,7 +164,7 @@ static void compute_se_residuals_mv(double **train_x, double *train_y,
             num += w * train_y[j];
             den += w;
         }
-        if (den == 0.0) {
+        if (den < NW_DENOM_TOL) {
             se_resid[i] = 0.0;
             continue;
         }
@@ -169,7 +175,7 @@ static void compute_se_residuals_mv(double **train_x, double *train_y,
             se_resid[i] = raw_resid;
         } else if (se_type == 1) {
             double den_loo = den - K0_prod;
-            if (den_loo <= 0.0) {
+            if (den_loo < NW_DENOM_TOL) {
                 se_resid[i] = raw_resid;
             } else {
                 double num_loo = num - K0_prod * train_y[i];
@@ -179,7 +185,7 @@ static void compute_se_residuals_mv(double **train_x, double *train_y,
         } else {
             double leverage = K0_prod / den;
             double adj = 1.0 - leverage;
-            if (adj > 1e-12) {
+            if (adj > NW_DENOM_TOL) {
                 se_resid[i] = raw_resid / adj;
             } else {
                 se_resid[i] = raw_resid;
@@ -201,7 +207,7 @@ static double nw_eval_1d_with_se(double x, double *train_x, double *train_y,
         den += w;
         se_num += w * w * se_resid[i] * se_resid[i];
     }
-    if (den == 0.0) {
+    if (den < NW_DENOM_TOL) {
         *se = SV_missval;
         return SV_missval;
     }
@@ -227,7 +233,7 @@ static double nw_eval_mv_with_se(double *x, double **train_x, double *train_y,
         se_num += w * w * se_resid[i] * se_resid[i];
     }
 
-    if (den == 0.0) {
+    if (den < NW_DENOM_TOL) {
         *se = SV_missval;
         return SV_missval;
     }
@@ -298,7 +304,7 @@ static double cv_mse_1d(double *data_x, double *data_y, int n, double h,
                 num += w * data_y[j];
                 den += w;
             }
-            if (den == 0.0) continue;
+            if (den < NW_DENOM_TOL) continue;
             double resid = data_y[i] - num / den;
             total_sq += resid * resid;
             n_test_total++;
@@ -339,7 +345,7 @@ static double cv_mse_mv(double **data_x, double *data_y, int n, int dim,
                 num += w * data_y[j];
                 den += w;
             }
-            if (den == 0.0) continue;
+            if (den < NW_DENOM_TOL) continue;
             double resid = data_y[i] - num / den;
             total_sq += resid * resid;
             n_test_total++;
