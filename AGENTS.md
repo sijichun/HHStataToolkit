@@ -47,12 +47,9 @@ stata -e do test/fangorn/test_fangorn_phase1.do
 stata -e do test/fangorn/test_fangorn_phase2.do
 stata -e do test/csa/test_csadensity.do
 
-# sklearn vs fangorn benchmark (decision tree / random forest)
-python test/fangorn/test_ent/test_ent_benchmark.py
-stata -e do test/fangorn/test_ent/test_fangorn_vs_sklearn.do
-
-python test/fangorn/test_rf/test_rf_benchmark.py
-stata -e do test/fangorn/test_rf/test_fangorn_vs_sklearn_rf.do
+# sklearn vs fangorn unified benchmark (decision tree + random forest)
+python test/fangorn/benchmark/test_benchmark.py
+stata -e do test/fangorn/benchmark/test_fangorn_benchmark.do
 ```
 
 ---
@@ -173,5 +170,4 @@ fangorn depvar indepvars, generate(name) [options]
 | `test/fangorn/test_fangorn_phase2.do` | Random forest (ntree>1) |
 | `test/fangorn/test_fangorn_regularization.do` | relimpdec, maxleafnodes |
 | `test/csa/test_csadensity.do` | csadensity common support |
-| `test/fangorn/test_ent/` | fangorn vs sklearn (decision tree) |
-| `test/fangorn/test_rf/` | fangorn vs sklearn (random forest) |
+| `test/fangorn/benchmark/` | Unified DT + RF benchmark vs sklearn (10k obs, 12 features) |

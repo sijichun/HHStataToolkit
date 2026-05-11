@@ -31,6 +31,7 @@
 {synopt :{opt criterion(string)}}split criterion: {cmd:gini}, {cmd:entropy}, {cmd:mse}{p_end}
 {synopt :{opt nclasses(#)}}number of classes (auto-detected for classification){p_end}
 {synopt :{opt mtry(#)}}features sampled per split; default is -1 (auto: sqrt(p) for classify, p/3 for regress){p_end}
+{synopt :{opt ntiles(#)}}quantile candidate thresholds; 0=all unique values (default), N>0 uses N-1 equally-spaced quantile thresholds for faster split finding{p_end}
 {synopt :{opt generate(string)}}prefix for output variables (required){p_end}
 {synopt :{opt predname(string)}}name for prediction variable{p_end}
 {synopt :{opt target(varname)}}0/1 variable: 0=training, 1=test{p_end}
@@ -134,6 +135,14 @@ reproducible when the same {cmd:seed()} is specified.
 split.  Default is -1 (automatic): {cmd:sqrt(p)} for classification, {cmd:p/3}
 for regression, where p is the number of independent variables.  Set to a
 positive integer to override.  When {cmd:ntree(1)}, this option is ignored.
+
+{phang}{opt ntiles(#)}: number of quantile bins used to generate candidate split
+thresholds.  Default is 0, which evaluates all unique value midpoints (exact CART).
+When set to a positive integer N, only N-1 equally-spaced quantile thresholds are
+evaluated per feature, reducing split-finding time on large datasets at the cost
+of potentially missing the optimal split.  Values between 10 and 100 are
+recommended for approximate splits.  When {cmd:nclasses()} is large or features
+have many unique values, {cmd:ntiles()} can significantly speed up training.
 
 {phang}{opt if(exp)}: Stata {cmd:if} qualifier, but specified as an option
 using parentheses: {cmd:if(condition)}.  This workaround avoids a Stata 18

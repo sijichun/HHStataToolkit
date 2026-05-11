@@ -141,6 +141,7 @@ STDLL stata_call(int argc, char *argv[])
     int is_classifier = 1;
     unsigned int seed = 12345;
     int mtry = -1;
+    int ntiles = 0;  /* 0 = use all unique value midpoints */
 
     char mermaid_file[512] = "";
     char feature_names_buf[1024] = "";
@@ -159,6 +160,7 @@ STDLL stata_call(int argc, char *argv[])
         if (extract_option_value(argv[i], "maxleafnodes",               buf, sizeof(buf))) max_leaf_nodes               = atoi(buf);
         if (extract_option_value(argv[i], "seed",                       buf, sizeof(buf))) seed                         = (unsigned int)atoi(buf);
         if (extract_option_value(argv[i], "mtry",                       buf, sizeof(buf))) mtry                         = atoi(buf);
+        if (extract_option_value(argv[i], "ntiles",                     buf, sizeof(buf))) ntiles                       = atoi(buf);
         if (extract_option_value(argv[i], "mermaid",             buf, sizeof(buf))) strncpy(mermaid_file, buf, sizeof(mermaid_file) - 1);
         if (extract_option_value(argv[i], "featurenames",        buf, sizeof(buf))) strncpy(feature_names_buf, buf, sizeof(feature_names_buf) - 1);
         if (extract_option_value(argv[i], "type", buf, sizeof(buf))) {
@@ -332,6 +334,7 @@ STDLL stata_call(int argc, char *argv[])
     params.is_classifier               = is_classifier;
     params.n_classes                   = nclasses;
     params.mtry                        = mtry;
+    params.ntiles                      = ntiles;
 
     DecisionTree *tree = NULL;
     RandomForest *forest = NULL;

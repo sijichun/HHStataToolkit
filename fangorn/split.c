@@ -94,12 +94,32 @@ static void find_best_split_feature(
     int *left_counts = NULL, *right_counts = NULL;
     double left_imp, right_imp, weighted_imp;
 
+    /* ntiles: precompute quantile positions (if enabled) */
+    int *quantile_pos = NULL;
+    int n_quantiles = 0;
+    int qi = 0;
+    int ntiles = params->ntiles;
+
+    if (ntiles > 0 && ntiles < n_sorted) {
+        quantile_pos = (int *)malloc((size_t)(ntiles - 1) * sizeof(int));
+        if (quantile_pos) {
+            int prev = 0;
+            for (i = 1; i < ntiles; i++) {
+                int pos = (int)((double)i / (double)ntiles * (double)n_sorted);
+                if (pos > 0 && pos < n_sorted && pos > prev)
+                    quantile_pos[n_quantiles++] = pos;
+                prev = pos;
+            }
+        }
+    }
+
     if (is_clf) {
         left_counts  = (int *)calloc((size_t)n_classes, sizeof(int));
         right_counts = (int *)calloc((size_t)n_classes, sizeof(int));
         if (!left_counts || !right_counts) {
             free(left_counts);
             free(right_counts);
+            free(quantile_pos);
             return;
         }
         for (i = 0; i < n_sorted; i++) {
@@ -143,6 +163,14 @@ static void find_best_split_feature(
         if (xval >= xnext) continue;
         if (left_n  < params->min_samples_leaf) continue;
         if (right_n < params->min_samples_leaf) continue;
+
+        /* With ntiles > 0, only evaluate at quantile boundaries */
+        if (quantile_pos) {
+            while (qi < n_quantiles && left_n > quantile_pos[qi]) qi++;
+            if (qi >= n_quantiles) break;
+            if (left_n < quantile_pos[qi]) continue;
+            qi++;  /* consume this quantile position */
+        }
 
         if (is_clf) {
             int c;
@@ -191,6 +219,7 @@ static void find_best_split_feature(
         }
     }
 
+    free(quantile_pos);
     if (is_clf) {
         free(left_counts);
         free(right_counts);

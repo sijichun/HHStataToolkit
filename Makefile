@@ -137,6 +137,7 @@ install: all
 	@echo "Installing fangorn..."
 	@cp fangorn/fangorn.plugin ~/ado/plus/ 2>/dev/null || true
 	@mkdir -p ~/ado/plus/f && cp fangorn/fangorn.ado ~/ado/plus/f/ 2>/dev/null || true
+	@cp fangorn/fangorn.sthlp ~/ado/plus/f/ 2>/dev/null || true
 	@echo "  Installed fangorn"
 ifneq ($(wildcard kdensity2/kdensity2_cuda.plugin),)
 	@echo "Installing kdensity2_cuda..."
@@ -171,6 +172,7 @@ dist: all
 	@echo "Packaging fangorn..."
 	@cp fangorn/fangorn.plugin ado/plus/ 2>/dev/null || true
 	@mkdir -p ado/plus/f && cp fangorn/fangorn.ado ado/plus/f/ 2>/dev/null || true
+	@cp fangorn/fangorn.sthlp ado/plus/f/ 2>/dev/null || true
 	@echo "  Packaged fangorn"
 ifneq ($(wildcard kdensity2/kdensity2_cuda.plugin),)
 	@echo "Packaging kdensity2_cuda..."

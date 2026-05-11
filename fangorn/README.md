@@ -216,6 +216,7 @@ fangorn depvar indepvars, generate(name) [options]
 | `criterion(gini\|entropy\|mse)` | Split criterion | auto |
 | `entcvdepth(N)` | CV depth selection (0 = disable) | `10` |
 | `mtry(N)` | Features per split | auto |
+| `ntiles(N)` | Quantile candidate thresholds; 0=all unique midpoints (exact CART), N>0 uses N-1 quantile thresholds for faster split finding | `0` |
 | `seed(N)` | RNG seed | `12345` |
 | `target(varname)` | Train/test split (0=train, 1=test) | all train |
 | `group(varlist)` | String vars auto-encoded | none |
@@ -504,27 +505,43 @@ Output format:
 
 ---
 
+## Phase 3-4 Execution Status
+
+The fangorn implementation follows a phased roadmap defined in `plan.md`.
+
+### Phase 3: Performance Optimization (partial)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| `ntiles` quantile strategy | ✅ **Done** | N-1 quantile thresholds; 0=all unique midpoints (exact CART) |
+| SIMD vectorization (impurity) | ❌ **Not done** | Low priority — impurity calculation is not the bottleneck |
+| Memory pool allocation | ❌ **Not done** | `malloc`/`free` overhead acceptable at current data sizes |
+| Stata help file (sthlp) | ✅ **Done** | `fangorn.sthlp` with full command syntax and examples |
+
+### Phase 4: Documentation & Release
+
+| Item | Status | Notes |
+|------|--------|-------|
+| `fangorn/README.md` (technical docs) | ✅ **Done** | Principles, data structures, C API, syntax reference |
+| Test do-files | ✅ **Done** | Phase 1 (decision tree), Phase 2 (RF), regularization, basic, CV, Mermaid export |
+| Unified sklearn benchmark | ✅ **Done** | `test/fangorn/benchmark/` — n=10000, 12 features (continuous+one-hot categorical) |
+| Project root `README.md` | ✅ **Done** | Listing in main project docs |
+| `Makefile` integration | ✅ **Done** | `make fangorn`, `make install` — multi-file custom rule |
+
+---
+
 ## Benchmarks
 
-### Decision Tree (single tree)
+Unified benchmark suite at `test/fangorn/benchmark/`:
+- **10,000 observations**, 12 features (5 continuous + 7 one-hot dummies from 2 categorical variables)
+- Complex non-linear DGP with interactions between continuous and categorical variables
+- 5-class classification + regression tasks
+- Reports computation speed for both fangorn and sklearn
 
-| Task | Criterion | fangorn | sklearn | Δ |
-|------|-----------|---------|---------|---|
-| 4-class classification | Gini | Acc 0.4717 | Acc 0.4733 | **0.0016** |
-| 4-class classification | Entropy | Acc 0.4633 | Acc 0.4700 | **0.0067** |
-| Regression | MSE | R² 0.8850 | R² 0.8847 | **0.0003** |
+Run:
+```bash
+python test/fangorn/benchmark/test_benchmark.py
+stata -e do test/fangorn/benchmark/test_fangorn_benchmark.do
+```
 
-All leaf counts identical. Core CART algorithm matches sklearn within ±0.007
-accuracy / ±0.0003 R².
-
-### Random Forest (100 trees)
-
-| Task | Metric | sklearn | fangorn | Notes |
-|------|--------|---------|---------|-------|
-| Classification (Gini) | Accuracy | 0.5450 | 0.5200 | RNG difference |
-| Classification (Entropy) | Accuracy | 0.5550 | 0.5283 | RNG difference |
-| Regression (mtry=5) | R² | 0.9371 | 0.9374 | Matches closely |
-
-RF usess LCG for bootstrap sampling (sklearn uses Mersenne Twister), so exact
-agreement is not expected. With `mtry=5` (all features), results are
-near-identical (R² 0.9371 vs 0.9374).
+Results are written to `test/fangorn/benchmark/README.md` after execution.

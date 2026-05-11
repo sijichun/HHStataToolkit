@@ -9,7 +9,7 @@ decision trees, written in C. Includes standalone utility commands.
 |--------|-------------|--------------|
 | **kdensity2** | Kernel density estimation | 1D/MV, target split (train/predict), multi-group, product kernel, CV bandwidth |
 | **nwreg** | Nadaraya-Watson kernel regression | 1D/MV, target split (train/predict), multi-group, CV bandwidth, robust SE |
-| **fangorn** | CART decision tree / random forest | Gini/Entropy/MSE, pre-sorted splits, CV depth selection, OOB error, MDI importance, mtry, Mermaid export |
+| **fangorn** | CART decision tree / random forest | Gini/Entropy/MSE, pre-sorted splits, CV depth selection, OOB error, MDI importance, mtry, ntiles quantile strategy, Mermaid export |
 
 ## Standalone Utilities
 
@@ -53,8 +53,13 @@ HHStataToolkit/
 │   ├── kdensity2/
 │   ├── nwreg/
 │   ├── fangorn/
-│   │   ├── test_ent/        # Decision tree benchmark vs scikit-learn
-│   │   └── test_rf/         # Random forest benchmark vs scikit-learn
+│   │   ├── benchmark/       # Unified DT + RF benchmark vs scikit-learn
+│   │   ├── test_fangorn_basic.do      # Quick integration smoke test
+│   │   ├── test_fangorn_cv.do         # CV depth selection test
+│   │   ├── test_fangorn_phase1.do     # Phase 1 decision tree tests
+│   │   ├── test_fangorn_phase2.do     # Phase 2 random forest tests
+│   │   ├── test_fangorn_regularization.do # Regularization tests
+│   │   └── test_mermaid_output.do     # Mermaid export tests
 │   └── csa/                 # csadensity tests
 └── AGENTS.md                # Agent instruction file (replaces CLI help for AI)
 ```
@@ -81,6 +86,9 @@ stata -e do test/kdensity2/test_chi2_group.do
 stata -e do test/nwreg/test_nwreg_simulation.do
 stata -e do test/fangorn/test_fangorn_phase1.do
 stata -e do test/fangorn/test_fangorn_phase2.do
+stata -e do test/fangorn/test_fangorn_regularization.do
+stata -e do test/fangorn/test_fangorn_basic.do
+stata -e do test/fangorn/test_fangorn_cv.do
 stata -e do test/csa/test_csadensity.do
 ```
 

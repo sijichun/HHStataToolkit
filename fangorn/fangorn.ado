@@ -31,6 +31,7 @@ program define fangorn, rclass
            SEED(integer 12345) ///
            NCLasses(integer -1) ///
            MTRY(integer -1) ///
+           NTiles(integer 0) ///
            GENerate(string) ///
            PREDname(string) ///
            TARget(varname numeric) ///
@@ -200,6 +201,7 @@ program define fangorn, rclass
 
     local plugin_args "`plugin_args' seed(`seed')"
     local plugin_args "`plugin_args' mtry(`mtry')"
+    local plugin_args "`plugin_args' ntiles(`ntiles')"
     local plugin_args "`plugin_args' nclasses(`nclasses_opt')"
     local plugin_args "`plugin_args' nfeatures(`nindep')"
     local plugin_args "`plugin_args' ntarget(`ntarget')"

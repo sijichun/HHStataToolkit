@@ -70,6 +70,7 @@ typedef struct {
     int    is_classifier;
     int    n_classes;
     int    mtry;                /* features per split: -1 = use all features */
+    int    ntiles;              /* quantile candidates: 0=all unique values, N>0 uses N-1 quantile thresholds */
 } TreeParams;
 
 /* ============================================================================
