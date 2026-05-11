@@ -195,6 +195,27 @@ the smallest positive `impurity_decrease` until `n_leaves ≤ N`.
 fangorn y x1 x2, generate(pred) relimpdec(0.1) maxleafnodes(8)
 ```
 
+### Reproducibility
+
+fangorn is fully deterministic when the same `seed()` is specified. The `seed`
+option controls three sources of randomness:
+
+1. **Bootstrap sampling** (`ntree > 1`): per-tree bootstrap draws use seed
+   `seed + tree_index`
+2. **mtry feature subsampling** (`ntree > 1`): per-tree LCG state starts at
+   `seed + 9999 + tree_index`
+3. **CV fold shuffle** (`entcvdepth ≥ 2`): fold assignment uses the `seed()`
+   value directly
+
+Single trees (`ntree = 1`) without CV are completely deterministic and do not
+use randomness at all — repeated runs without specifying `seed()` will always
+produce identical results.
+
+**OpenMP note**: The OpenMP parallel tree construction in `build_random_forest`
+uses per-thread LCG states (`seed + 9999 + t`), so results are reproducible
+regardless of the number of threads. Set `OMP_NUM_THREADS` to control
+parallelism without affecting output.
+
 ---
 
 ## Stata Syntax
@@ -522,8 +543,8 @@ The fangorn implementation follows a phased roadmap defined in `plan.md`.
 
 | Item | Status | Notes |
 |------|--------|-------|
-| `fangorn/README.md` (technical docs) | ✅ **Done** | Principles, data structures, C API, syntax reference |
-| Test do-files | ✅ **Done** | Phase 1 (decision tree), Phase 2 (RF), regularization, basic, CV, Mermaid export |
+| `fangorn/README.md` (technical docs) | ✅ **Done** | Principles, data structures, C API, syntax reference, reproducibility |
+| Test do-files | ✅ **Done** | Phase 1 (decision tree), Phase 2 (RF), regularization, basic, CV, Mermaid export, seed reproducibility |
 | Unified sklearn benchmark | ✅ **Done** | `test/fangorn/benchmark/` — n=10000, 12 features (continuous+one-hot categorical) |
 | Project root `README.md` | ✅ **Done** | Listing in main project docs |
 | `Makefile` integration | ✅ **Done** | `make fangorn`, `make install` — multi-file custom rule |

@@ -126,10 +126,14 @@ plugin but not yet used for group-specific tree building (Phase 2).{p_end}
 Mermaid flowchart file for documentation or visualization.  The file is
 overwritten if it exists.
 
-{phang}{opt seed(#)}: random seed for the internal PRNG.  Default is 12345.
-Controls reproducibility of bootstrap sampling and feature subsampling.  Each
-tree uses {cmd:seed} + tree_index as its own seed, so the forest is fully
-reproducible when the same {cmd:seed()} is specified.
+{phang}{opt seed(#)}: random seed for the internal Park-Miller LCG PRNG.
+Default is 12345.  Controls reproducibility of bootstrap sampling, mtry
+feature subsampling, and CV fold assignment.  When {cmd:ntree} > 1, each tree
+uses {cmd:seed} + tree_index for bootstrap and {cmd:seed} + 9999 + tree_index
+for mtry, ensuring bit-identical results across repeated runs.  Single trees
+({cmd:ntree(1)}) without CV depth selection are fully deterministic and do
+not require a seed.  Changing {cmd:OMP_NUM_THREADS} does not affect
+reproducibility because each thread maintains its own LCG state.
 
 {phang}{opt mtry(#)}: number of features randomly sampled as candidates at each
 split.  Default is -1 (automatic): {cmd:sqrt(p)} for classification, {cmd:p/3}
