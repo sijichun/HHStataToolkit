@@ -25,7 +25,7 @@ gen x2 = runiform()*10
 gen treatment = runiform()<0.5
 drop if treatment == 0 & (x2>2*x1+rnormal()*0.2 | x2<x1+rnormal()*0.2)
 drop if treatment == 1 & (x2>-2*x1+10+rnormal()*0.2 | x2< -x1+5+rnormal()*0.2) 
-csadensity x1 x2, treatment(treatment) generate(csa) debug
+csadensity x1 x2, treatment(treatment) generate(csa)
 
 twoway (scatter x2 x1 if treatment==0) ///
        (scatter x2 x1 if treatment==1)

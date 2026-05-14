@@ -1,0 +1,36 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      Stata 18.0
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Single-user 16-core  perpetual
+Serial number: 501806307019
+  Licensed to: Keep calm and DO your research
+               Jichun Si
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+. do csa_density_example.md 
+
+. # csadensity 使用示例
+Unknown #command
+. 
+. 本文档基于 `test/csa/test_csa.do` 中的两个测试场景，说明 `csadensity` 命令的
+> 核心功能与使用原因。
+command 本文档基于 is unrecognized
+r(199);
+
+end of do-file
+r(199);

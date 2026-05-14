@@ -4,6 +4,8 @@ High-performance C plugin implementing CART trees and Random Forests, with
 OpenMP parallel tree construction, OOB error, MDI feature importance, and
 CV-based depth selection.
 
+> **Note**: 对于因果推断，更好的方法是使用 **causal forest** 和 **generalized random forest**（Athey & Imbens, 2016; Athey, Tibshirani & Wager, 2019），仍待开发。当前 fangorn 的 `target()` 选项提供了一种简化的反事实预测方式，但尚不具备异质性处理效应（CATE）的无偏估计、honest 分裂等 causal forest 的核心特性。
+
 ---
 
 ## Table of Contents
