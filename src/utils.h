@@ -168,18 +168,25 @@ void stata_printf(const char *fmt, ...);
 
 /* 
  * Set default OpenMP thread count for all plugins.
- * Default: 8 threads. Override via OMP_NUM_THREADS env var.
+ * Reads OMP_NUM_THREADS env var explicitly and calls omp_set_num_threads()
+ * to ensure the plugin honors it. Falls back to 8 threads if unset.
+ * Also disables dynamic thread adjustment for deterministic behavior.
  * Call this at the start of each plugin's stata_call().
  */
 #ifdef _OPENMP
 #include <omp.h>
 #define UTILS_OMP_SET_NTHREADS() do { \
-    if (getenv("OMP_NUM_THREADS") == NULL) { \
-        omp_set_num_threads(8); \
-    } \
+    const char *_omp_env = getenv("OMP_NUM_THREADS"); \
+    int _nthr = (_omp_env) ? atoi(_omp_env) : 8; \
+    if (_nthr < 1) _nthr = 1; \
+    omp_set_num_threads(_nthr); \
+    omp_set_dynamic(0); \
 } while(0)
 #else
 #define UTILS_OMP_SET_NTHREADS() /* no-op */
 #endif
+
+/* Group Limits (moved from plugin-specific .c files) */
+#define MAX_GROUPS  5000
 
 #endif

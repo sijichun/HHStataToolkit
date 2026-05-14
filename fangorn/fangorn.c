@@ -142,6 +142,7 @@ STDLL stata_call(int argc, char *argv[])
     unsigned int seed = 12345;
     int mtry = -1;
     int ntiles = 0;  /* 0 = use all unique value midpoints */
+    int nproc_opt = 0; /* 0 = don't override (use UTILS_OMP_SET_NTHREADS default) */
 
     char mermaid_file[512] = "";
     char feature_names_buf[1024] = "";
@@ -161,6 +162,7 @@ STDLL stata_call(int argc, char *argv[])
         if (extract_option_value(argv[i], "seed",                       buf, sizeof(buf))) seed                         = (unsigned int)atoi(buf);
         if (extract_option_value(argv[i], "mtry",                       buf, sizeof(buf))) mtry                         = atoi(buf);
         if (extract_option_value(argv[i], "ntiles",                     buf, sizeof(buf))) ntiles                       = atoi(buf);
+        if (extract_option_value(argv[i], "nproc",                      buf, sizeof(buf))) nproc_opt                    = atoi(buf);
         if (extract_option_value(argv[i], "mermaid",             buf, sizeof(buf))) strncpy(mermaid_file, buf, sizeof(mermaid_file) - 1);
         if (extract_option_value(argv[i], "featurenames",        buf, sizeof(buf))) strncpy(feature_names_buf, buf, sizeof(feature_names_buf) - 1);
         if (extract_option_value(argv[i], "type", buf, sizeof(buf))) {
@@ -172,6 +174,10 @@ STDLL stata_call(int argc, char *argv[])
             else if (strcmp(buf, "mse")     == 0) criterion = CRITERION_MSE;
         }
     }
+
+    #ifdef _OPENMP
+    if (nproc_opt >= 1) omp_set_num_threads(nproc_opt);
+    #endif
 
     if (n_features <= 0) {
         SF_error("fangorn: nfeatures() must be specified and > 0\n");

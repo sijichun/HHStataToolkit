@@ -21,6 +21,7 @@ program define nwreg, rclass
            MINcount(integer 0) ///
            FOLDS(integer 10) ///
            GRIDs(integer 10) ///
+           NPROC(integer 16) ///
            IF(string) IN(string) ]
     
     /* Create touse marker from if/in option */
@@ -149,18 +150,18 @@ program define nwreg, rclass
     if `nse' local plugin_vars "`plugin_vars' `se'"
     local plugin_vars "`plugin_vars' `touse'"
     
-    /* Load plugin (capture avoids "already defined" on repeated calls) */
+    * Load CPU plugin
     local plugin_path "nwreg/nwreg.plugin"
     capture findfile nwreg.plugin
     if _rc capture findfile p/nwreg.plugin
     if _rc capture findfile nwreg/nwreg.plugin
     if !_rc local plugin_path "`r(fn)'"
-    * Expand ~ to full path (plugin using() doesn't handle tilde)
     local homedir : env HOME
     local plugin_path = subinstr("`plugin_path'", "~", "`homedir'", .)
     capture program _nwreg_plugin, plugin using("`plugin_path'")
     
-    /* Build options for plugin */
+    /* Build options for plugin — use user-specified nproc or default 4 */
+    local nproc = `nproc'
     local plugin_args "kernel(`kernel_opt')"
     local plugin_args "`plugin_args' bw(`bw_opt')"
     local plugin_args "`plugin_args' nreg(`nreg')"
@@ -171,6 +172,8 @@ program define nwreg, rclass
     local plugin_args "`plugin_args' minobs(`mincount')"
     local plugin_args "`plugin_args' nfolds(`folds')"
     local plugin_args "`plugin_args' ngrids(`grids')"
+    local plugin_args "`plugin_args' gpu(-1)"
+    local plugin_args "`plugin_args' nproc(`nproc')"
     
     /* If CV bandwidth: shuffle data order for randomized folds */
     local is_cv = ("`bw_opt'" == "cv")

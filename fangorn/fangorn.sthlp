@@ -38,6 +38,7 @@
 {synopt :{opt group(varlist)}}grouping variable(s){p_end}
 {synopt :{opt mermaid(string)}}filename for Mermaid diagram export{p_end}
 {synopt :{opt seed(#)}}random seed; default is 12345{p_end}
+{synopt :{opt nproc(#)}}OpenMP threads for CPU parallelism; default is 16{p_end}
 {synopt :{opt if(exp)}}observations to include (use parentheses){p_end}
 {synopt :{opt in(string)}}observation range to include{p_end}
 {synoptline}
@@ -147,6 +148,11 @@ evaluated per feature, reducing split-finding time on large datasets at the cost
 of potentially missing the optimal split.  Values between 10 and 100 are
 recommended for approximate splits.  When {cmd:nclasses()} is large or features
 have many unique values, {cmd:ntiles()} can significantly speed up training.
+
+{phang}{opt nproc(#)}: number of OpenMP threads for CPU parallelism during
+tree construction and cross-validation.  Default is 16.  Set higher for faster
+multi-core computation on large random forests, lower to reserve CPU resources
+for other tasks.  Overridden by {envvar:OMP_NUM_THREADS} if set.{p_end}
 
 {phang}{opt if(exp)}: Stata {cmd:if} qualifier, but specified as an option
 using parentheses: {cmd:if(condition)}.  This workaround avoids a Stata 18

@@ -16,8 +16,15 @@ if _rc {
     exit 111
 }
 
-* Verify GPU plugin exists
-capture kdensity2 x, generate(f) gpu(0)
+* Verify GPU plugin exists — check file directly without loading it
+capture findfile kdensity2_cuda.plugin
+if _rc {
+    display as text "CUDA plugin not available — skipping GPU reproducibility tests"
+    exit 0
+}
+local homedir : env HOME
+local plugin_path = subinstr("`r(fn)'", "~", "`homedir'", .)
+capture confirm file "`plugin_path'"
 if _rc {
     display as text "CUDA plugin not available — skipping GPU reproducibility tests"
     exit 0

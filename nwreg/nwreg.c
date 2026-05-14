@@ -14,6 +14,10 @@
 #include "stplugin.h"
 #include "utils.h"
 
+#ifdef USE_CUDA
+#include "nwreg_cuda.h"
+#endif
+
 /* ============================================================================
  * Denominator Tolerance
  * ============================================================================ */
@@ -30,8 +34,8 @@
  * Returns Σ K_h(x - x_i) * y_i / Σ K_h(x - x_i) over training set.
  * Returns SV_missval if denominator is zero.
  */
-static double nw_eval_1d(double x, double *train_x, double *train_y,
-                          int n_train, double h, int kernel_type)
+double nw_eval_1d_cpu(double x, double *train_x, double *train_y,
+                        int n_train, double h, int kernel_type)
 {
     kernel_1d_func K = get_kernel_1d(kernel_type);
     double num = 0.0, den = 0.0;
@@ -46,13 +50,13 @@ static double nw_eval_1d(double x, double *train_x, double *train_y,
 }
 
 /**
- * nw_eval_mv - Evaluate NW estimate at a single multivariate point x[dim].
+ * nw_eval_mv_cpu - Evaluate NW estimate at a single multivariate point x[dim].
  *
  * Uses product kernel K_h(x) = Π_d K((x_d - x_i_d) / h_d).
  * Returns SV_missval if denominator is zero.
  */
-static double nw_eval_mv(double *x, double **train_x, double *train_y,
-                          int n_train, int dim, double *h, int kernel_type)
+double nw_eval_mv_cpu(double *x, double **train_x, double *train_y,
+                        int n_train, int dim, double *h, int kernel_type)
 {
     double num = 0.0, den = 0.0;
     int i;
@@ -273,13 +277,13 @@ static void compute_bw(double **train_x, int n_train, int dim,
 #define CV_GRID_STEP 0.05
 
 /**
- * cv_mse_1d - K-fold CV negative MSE for 1D NW regression.
+ * cv_mse_1d_cpu - K-fold CV negative MSE for 1D NW regression.
  *
  * Returns -MSE so that maximising the score = minimising MSE,
  * consistent with the kdensity2 convention of "larger = better".
  */
-static double cv_mse_1d(double *data_x, double *data_y, int n, double h,
-                         int kernel_type, int k)
+double cv_mse_1d_cpu(double *data_x, double *data_y, int n, double h,
+                      int kernel_type, int k)
 {
     kernel_1d_func K = get_kernel_1d(kernel_type);
     double total_sq = 0.0;
@@ -315,10 +319,10 @@ static double cv_mse_1d(double *data_x, double *data_y, int n, double h,
 }
 
 /**
- * cv_mse_mv - K-fold CV negative MSE for multivariate NW regression.
+ * cv_mse_mv_cpu - K-fold CV negative MSE for multivariate NW regression.
  */
-static double cv_mse_mv(double **data_x, double *data_y, int n, int dim,
-                         double *h, int kernel_type, int k)
+double cv_mse_mv_cpu(double **data_x, double *data_y, int n, int dim,
+                      double *h, int kernel_type, int k)
 {
     double total_sq = 0.0;
     int n_test_total = 0;
@@ -356,16 +360,36 @@ static double cv_mse_mv(double **data_x, double *data_y, int n, int dim,
 }
 
 static double cv_select_1d(double *data_x, double *data_y, int n,
-                            int kernel_type, int k, int ngrids, double ref_h)
+                            int kernel_type, int k, int ngrids, double ref_h,
+                            int gpu_device)
 {
     double grid[201];
     int n_candidates;
     generate_log_grid(ref_h, CV_GRID_STEP, ngrids, grid, &n_candidates);
 
+#ifdef USE_CUDA
+    if (gpu_device >= 0) {
+        double best_h = ref_h, best_score = -1e100;
+        int i;
+        for (i = 0; i < n_candidates; i++) {
+            double score;
+            if (gpu_cv_mse_1d(data_x, data_y, n, grid[i], kernel_type, k, &score, gpu_device) != 0) {
+                SF_error("Error: GPU cross-validation (1D) failed\n");
+                return ref_h;
+            }
+            if (score > best_score) {
+                best_score = score;
+                best_h = grid[i];
+            }
+        }
+        return best_h;
+    }
+#endif
+
     double best_h = ref_h, best_score = -1e100;
     int i;
     for (i = 0; i < n_candidates; i++) {
-        double score = cv_mse_1d(data_x, data_y, n, grid[i], kernel_type, k);
+        double score = cv_mse_1d_cpu(data_x, data_y, n, grid[i], kernel_type, k);
         if (score > best_score) {
             best_score = score;
             best_h = grid[i];
@@ -376,7 +400,7 @@ static double cv_select_1d(double *data_x, double *data_y, int n,
 
 static void cv_select_mv(double **data_x, double *data_y, int n, int dim,
                           int kernel_type, int k, int ngrids,
-                          double *ref_h, double *h_out)
+                          double *ref_h, double *h_out, int gpu_device)
 {
     double grid[201];
     int n_candidates;
@@ -395,11 +419,33 @@ static void cv_select_mv(double **data_x, double *data_y, int n, int dim,
         return;
     }
 
+#ifdef USE_CUDA
+    if (gpu_device >= 0) {
+        int i;
+        for (i = 0; i < n_candidates; i++) {
+            double scale = grid[i] / ref_scale;
+            for (d = 0; d < dim; d++) cand_h[d] = ref_h[d] * scale;
+            double score;
+            if (gpu_cv_mse_mv(data_x, data_y, n, dim, cand_h, kernel_type, k, &score, gpu_device) != 0) {
+                SF_error("Error: GPU cross-validation (multivariate) failed\n");
+                free(cand_h);
+                return;
+            }
+            if (score > best_score) {
+                best_score = score;
+                for (d = 0; d < dim; d++) h_out[d] = cand_h[d];
+            }
+        }
+        free(cand_h);
+        return;
+    }
+#endif
+
     int i;
     for (i = 0; i < n_candidates; i++) {
         double scale = grid[i] / ref_scale;
         for (d = 0; d < dim; d++) cand_h[d] = ref_h[d] * scale;
-        double score = cv_mse_mv(data_x, data_y, n, dim, cand_h, kernel_type, k);
+        double score = cv_mse_mv_cpu(data_x, data_y, n, dim, cand_h, kernel_type, k);
         if (score > best_score) {
             best_score = score;
             for (d = 0; d < dim; d++) h_out[d] = cand_h[d];
@@ -416,13 +462,13 @@ static void cv_select_mv(double **data_x, double *data_y, int n, int dim,
 static void compute_bw_cv(double **train_x, double *train_y, int n_train,
                             int dim, int bandwidth_rule, double manual_h,
                             int cv_folds, int cv_grids, int kernel_type,
-                            double *h)
+                            double *h, int gpu_device)
 {
     if (bandwidth_rule == BANDWIDTH_CV) {
         if (dim == 1) {
             double ref_h = silverman_bandwidth(train_x[0], n_train);
             h[0] = cv_select_1d(train_x[0], train_y, n_train, kernel_type,
-                                 cv_folds, cv_grids, ref_h);
+                                 cv_folds, cv_grids, ref_h, gpu_device);
         } else {
             double *ref_h = (double*)malloc(dim * sizeof(double));
             if (!ref_h) {
@@ -431,7 +477,7 @@ static void compute_bw_cv(double **train_x, double *train_y, int n_train,
             }
             silverman_bandwidth_mv(train_x, n_train, dim, ref_h);
             cv_select_mv(train_x, train_y, n_train, dim, kernel_type,
-                          cv_folds, cv_grids, ref_h, h);
+                          cv_folds, cv_grids, ref_h, h, gpu_device);
             free(ref_h);
         }
     } else {
@@ -443,7 +489,7 @@ static void compute_bw_cv(double **train_x, double *train_y, int n_train,
  * Group Handling (identical pattern to kdensity2)
  * ============================================================================ */
 
-#define MAX_GROUPS 1000
+/* MAX_GROUPS is now defined in src/utils.h */
 
 typedef struct {
     double **values;
@@ -516,6 +562,89 @@ static void collect_unique_groups(double **group, int n_obs, int ngroup,
 }
 
 /* ============================================================================
+ * Batch evaluation dispatcher (CPU or GPU)
+ * ============================================================================ */
+
+static int eval_regression_batch(double **reg_data, int dim,
+                                  double **train_x, double *train_y,
+                                  int n_train, double *h, int kernel_type,
+                                  int *obs_indices, int n_eval,
+                                  double *result, int gpu_device)
+{
+    int i, d;
+
+#ifdef USE_CUDA
+    if (gpu_device >= 0) {
+        if (dim == 1) {
+            double *x_batch = (double*)malloc(n_eval * sizeof(double));
+            double *res_batch = (double*)malloc(n_eval * sizeof(double));
+            if (!x_batch || !res_batch) {
+                free(x_batch); free(res_batch);
+                SF_error("Error: Memory allocation failed for GPU batch\n");
+                return 1;
+            }
+            for (i = 0; i < n_eval; i++)
+                x_batch[i] = reg_data[0][obs_indices[i]];
+            if (gpu_nw_eval_1d(x_batch, train_x[0], train_y, n_train, n_eval,
+                               h[0], kernel_type, res_batch, gpu_device) != 0) {
+                SF_error("Error: GPU NW regression evaluation (1D) failed\n");
+                free(x_batch); free(res_batch);
+                return 1;
+            }
+            for (i = 0; i < n_eval; i++)
+                result[obs_indices[i]] = res_batch[i];
+            free(x_batch); free(res_batch);
+            return 0;
+        } else {
+            double *x_batch_flat = (double*)malloc((size_t)dim * n_eval * sizeof(double));
+            double *res_batch = (double*)malloc(n_eval * sizeof(double));
+            if (!x_batch_flat || !res_batch) {
+                free(x_batch_flat); free(res_batch);
+                SF_error("Error: Memory allocation failed for GPU batch\n");
+                return 1;
+            }
+            for (i = 0; i < n_eval; i++)
+                for (d = 0; d < dim; d++)
+                    x_batch_flat[d * n_eval + i] = reg_data[d][obs_indices[i]];
+            if (gpu_nw_eval_mv(x_batch_flat, train_x, train_y, n_train, n_eval,
+                               dim, h, kernel_type, res_batch, gpu_device) != 0) {
+                SF_error("Error: GPU NW regression evaluation (multivariate) failed\n");
+                free(x_batch_flat); free(res_batch);
+                return 1;
+            }
+            for (i = 0; i < n_eval; i++)
+                result[obs_indices[i]] = res_batch[i];
+            free(x_batch_flat); free(res_batch);
+            return 0;
+        }
+    }
+#else
+    (void)gpu_device;
+#endif
+
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (i = 0; i < n_eval; i++) {
+        int j = obs_indices[i];
+        if (dim == 1) {
+            result[j] = nw_eval_1d_cpu(reg_data[0][j],
+                                        train_x[0], train_y,
+                                        n_train, h[0], kernel_type);
+        } else {
+            double *x = (double*)malloc(dim * sizeof(double));
+            if (x) {
+                for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
+                result[j] = nw_eval_mv_cpu(x, train_x, train_y,
+                                            n_train, dim, h, kernel_type);
+                free(x);
+            }
+        }
+    }
+    return 0;
+}
+
+/* ============================================================================
  * Main Plugin Entry Point
  * ============================================================================ */
 
@@ -536,6 +665,7 @@ STDLL stata_call(int argc, char *argv[])
     int nse     = 0;
     int se_type = 2;
     int minobs  = 0;
+    int gpu_device = -1;
 
     /* ---- Parse argv ---- */
     int i;
@@ -588,6 +718,17 @@ STDLL stata_call(int argc, char *argv[])
             cv_grids = atoi(buf);
             if (cv_grids < 2) cv_grids = 2;
         }
+        else if (extract_option_value(arg, "gpu", buf, sizeof(buf))) {
+            gpu_device = atoi(buf);
+        }
+        else if (extract_option_value(arg, "nproc", buf, sizeof(buf))) {
+#ifdef _OPENMP
+            int nthr = atoi(buf);
+            if (nthr < 1) nthr = 1;
+            omp_set_num_threads(nthr);
+            omp_set_dynamic(0);
+#endif
+        }
     }
 
     ST_int n_obs = SF_nobs();
@@ -598,6 +739,24 @@ STDLL stata_call(int argc, char *argv[])
         SF_error("Error: nreg must be >= 1\n");
         return 1;
     }
+
+#ifdef USE_CUDA
+    if (gpu_device >= 0) {
+        int preflight = gpu_preflight_check(gpu_device, 0);
+        if (preflight != 0) {
+            char buf[128];
+            switch (preflight) {
+                case -1: snprintf(buf, sizeof(buf), "Error: No CUDA devices found\n"); break;
+                case -2: snprintf(buf, sizeof(buf), "Error: Invalid GPU device ID (%d)\n", gpu_device); break;
+                case -3: snprintf(buf, sizeof(buf), "Error: GPU compute capability < 6.0 not supported\n"); break;
+                case -4: snprintf(buf, sizeof(buf), "Error: Insufficient GPU memory\n"); break;
+                default: snprintf(buf, sizeof(buf), "Error: GPU preflight check failed (code %d)\n", preflight); break;
+            }
+            SF_error(buf);
+            return 1;
+        }
+    }
+#endif
 
     int dim = nreg;
 
@@ -772,7 +931,8 @@ STDLL stata_call(int argc, char *argv[])
             }
             compute_bw_cv(train_x, train_y, n_train_g, dim,
                            bandwidth_rule, manual_h,
-                           cv_folds, cv_grids, kernel_type, h);
+                           cv_folds, cv_grids, kernel_type, h,
+                           gpu_device);
 
             /* ---- Compute standard errors (if requested) ---- */
             if (nse > 0) {
@@ -821,28 +981,35 @@ STDLL stata_call(int argc, char *argv[])
                 free(se_resid);
             } else {
                 /* Evaluate NW estimator for ALL obs in this group (no SE) */
-#ifdef _OPENMP
-#pragma omp parallel for
-#endif
+                int n_eval_g = 0;
                 for (j = 0; j < n_obs; j++) {
-                    if (in_if[j] &&
-                        match_group_combo(group, ngroup, j, ug->values[i])) {
-                        if (dim == 1) {
-                            result[j] = nw_eval_1d(reg_data[0][j],
-                                                   train_x[0], train_y,
-                                                   n_train_g, h[0], kernel_type);
-                        } else {
-                            double *x = (double*)malloc(dim * sizeof(double));
-                            if (x) {
-                                int d;
-                                for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
-                                result[j] = nw_eval_mv(x, train_x, train_y,
-                                                        n_train_g, dim, h,
-                                                        kernel_type);
-                                free(x);
-                            }
-                        }
+                    if (in_if[j] && match_group_combo(group, ngroup, j, ug->values[i]))
+                        n_eval_g++;
+                }
+                int *eval_indices = (int*)malloc(n_eval_g * sizeof(int));
+                if (eval_indices) {
+                    int ei = 0;
+                    for (j = 0; j < n_obs; j++) {
+                        if (in_if[j] && match_group_combo(group, ngroup, j, ug->values[i]))
+                            eval_indices[ei++] = j;
                     }
+                    if (eval_regression_batch(reg_data, dim, train_x, train_y,
+                                               n_train_g, h, kernel_type,
+                                               eval_indices, n_eval_g,
+                                               result, gpu_device) != 0) {
+                        free(eval_indices);
+                        free(h);
+                        free_matrix(train_x, dim);
+                        free(train_y);
+                        free_unique_groups(ug);
+                        free(in_if);
+                        free_matrix(reg_data, dim);
+                        free(y_data);
+                        free(target);
+                        free(result);
+                        return 1;
+                    }
+                    free(eval_indices);
                 }
             }
 
@@ -911,7 +1078,8 @@ STDLL stata_call(int argc, char *argv[])
 
         compute_bw_cv(train_x, train_y, n_train, dim,
                        bandwidth_rule, manual_h,
-                       cv_folds, cv_grids, kernel_type, h);
+                       cv_folds, cv_grids, kernel_type, h,
+                       gpu_device);
 
         /* ---- Compute standard errors (if requested) ---- */
         if (nse > 0) {
@@ -965,26 +1133,32 @@ STDLL stata_call(int argc, char *argv[])
             free(se_resid);
         } else {
             /* Evaluate NW estimator for ALL in-sample obs (no SE) */
-#ifdef _OPENMP
-#pragma omp parallel for
-#endif
+            int n_eval = 0;
             for (j = 0; j < n_obs; j++) {
-                if (in_if[j]) {
-                    if (dim == 1) {
-                        result[j] = nw_eval_1d(reg_data[0][j],
-                                                train_x[0], train_y,
-                                                n_train, h[0], kernel_type);
-                    } else {
-                        double *x = (double*)malloc(dim * sizeof(double));
-                        if (x) {
-                            int d;
-                            for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
-                            result[j] = nw_eval_mv(x, train_x, train_y,
-                                                    n_train, dim, h, kernel_type);
-                            free(x);
-                        }
-                    }
+                if (in_if[j]) n_eval++;
+            }
+            int *eval_indices = (int*)malloc(n_eval * sizeof(int));
+            if (eval_indices) {
+                int ei = 0;
+                for (j = 0; j < n_obs; j++) {
+                    if (in_if[j]) eval_indices[ei++] = j;
                 }
+                if (eval_regression_batch(reg_data, dim, train_x, train_y,
+                                           n_train, h, kernel_type,
+                                           eval_indices, n_eval,
+                                           result, gpu_device) != 0) {
+                    free(eval_indices);
+                    free(h);
+                    free_matrix(train_x, dim);
+                    free(train_y);
+                    free(in_if);
+                    free_matrix(reg_data, dim);
+                    free(y_data);
+                    free(target);
+                    free(result);
+                    return 1;
+                }
+                free(eval_indices);
             }
         }
 

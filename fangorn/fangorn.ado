@@ -37,6 +37,7 @@ program define fangorn, rclass
            TARget(varname numeric) ///
            GRoup(varlist) ///
            MERmaid(string) ///
+           NPROC(integer 16) ///
            IF(string) IN(string) ]
     
     /* Create touse marker from if/in option */
@@ -206,6 +207,7 @@ program define fangorn, rclass
     local plugin_args "`plugin_args' nfeatures(`nindep')"
     local plugin_args "`plugin_args' ntarget(`ntarget')"
     local plugin_args "`plugin_args' ngroup(`ngroup')"
+    local plugin_args "`plugin_args' nproc(`nproc')"
     if `nindep' > 0 {
         local plugin_args "`plugin_args' featurenames(`indepvars')"
     }

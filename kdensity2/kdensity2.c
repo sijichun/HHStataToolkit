@@ -325,7 +325,7 @@ static int compute_bandwidth_cv(double **train_data, int n_train, int dim,
     }
 }
 
-#define MAX_GROUPS 1000
+/* MAX_GROUPS is now defined in src/utils.h */
 
 typedef struct {
     double **values;
@@ -541,6 +541,14 @@ STDLL stata_call(int argc, char *argv[])
         }
         else if (extract_option_value(arg, "gpu", buf, sizeof(buf))) {
             gpu_device = atoi(buf);
+        }
+        else if (extract_option_value(arg, "nproc", buf, sizeof(buf))) {
+#ifdef _OPENMP
+            int nthr = atoi(buf);
+            if (nthr < 1) nthr = 1;
+            omp_set_num_threads(nthr);
+            omp_set_dynamic(0);
+#endif
         }
     }
 

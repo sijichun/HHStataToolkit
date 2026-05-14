@@ -63,11 +63,11 @@ else ifeq ($(UNAME_S),Darwin)
 endif
 
 # Build targets
-.PHONY: all clean install dist help check-openblas $(PLUGINS) fangorn kdensity2_cuda
+.PHONY: all clean install dist help check-openblas $(PLUGINS) fangorn kdensity2_cuda nwreg_cuda
 
 CUDA_TARGETS :=
 ifneq ($(NVCC),)
-CUDA_TARGETS += kdensity2_cuda
+CUDA_TARGETS += kdensity2_cuda nwreg_cuda
 endif
 
 check-openblas:
@@ -86,7 +86,7 @@ ifneq ($(OS),Windows_NT)
 endif
 endif
 
-all: $(PLUGINS) fangorn $(CUDA_TARGETS)
+all: $(PLUGINS) fangorn
 
 # Generic plugin build rule (for single-file plugins)
 $(PLUGINS): check-openblas
@@ -111,6 +111,17 @@ else
 	@echo "kdensity2_cuda build complete (cudart statically linked)."
 endif
 
+# CUDA-accelerated nwreg plugin (requires nvcc)
+nwreg_cuda:
+ifeq ($(NVCC),)
+	@echo "Error: nvcc not found; cannot build nwreg_cuda."
+	@exit 1
+else
+	@echo "Building nwreg_cuda..."
+	$(NVCC) $(CUDA_FLAGS) $(COMMON_SRC) nwreg/nwreg.c nwreg/nwreg_cuda.cu -o nwreg/nwreg_cuda.plugin -lm -lcudart_static -lpthread -ldl
+	@echo "nwreg_cuda build complete (cudart statically linked)."
+endif
+
 # Clean all plugins
 clean:
 	@for p in $(PLUGINS); do \
@@ -121,6 +132,8 @@ clean:
 	@rm -f fangorn/fangorn.plugin
 	@echo "Cleaning kdensity2_cuda..."
 	@rm -f kdensity2/kdensity2_cuda.plugin
+	@echo "Cleaning nwreg_cuda..."
+	@rm -f nwreg/nwreg_cuda.plugin
 	@rm -rf ado/plus
 
 # Install: .plugin → ~/ado/plus/, .ado/.sthlp → ~/ado/plus/<letter>/
@@ -143,6 +156,11 @@ ifneq ($(wildcard kdensity2/kdensity2_cuda.plugin),)
 	@echo "Installing kdensity2_cuda..."
 	@cp kdensity2/kdensity2_cuda.plugin ~/ado/plus/ 2>/dev/null || true
 	@echo "  Installed kdensity2_cuda"
+endif
+ifneq ($(wildcard nwreg/nwreg_cuda.plugin),)
+	@echo "Installing nwreg_cuda..."
+	@cp nwreg/nwreg_cuda.plugin ~/ado/plus/ 2>/dev/null || true
+	@echo "  Installed nwreg_cuda"
 endif
 	@echo "Installing single_ado files..."
 	@for f in $(SINGLE_ADO_FILES); do \
@@ -179,6 +197,11 @@ ifneq ($(wildcard kdensity2/kdensity2_cuda.plugin),)
 	@cp kdensity2/kdensity2_cuda.plugin ado/plus/ 2>/dev/null || true
 	@echo "  Packaged kdensity2_cuda"
 endif
+ifneq ($(wildcard nwreg/nwreg_cuda.plugin),)
+	@echo "Packaging nwreg_cuda..."
+	@cp nwreg/nwreg_cuda.plugin ado/plus/ 2>/dev/null || true
+	@echo "  Packaged nwreg_cuda"
+endif
 	@echo "Packaging single_ado files..."
 	@for f in $(SINGLE_ADO_FILES); do \
 		base=$$(basename $$f .ado); \
@@ -196,9 +219,10 @@ help:
 	@echo "Stata Kernel Plugins Makefile"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all          - Build all plugins (default)"
+	@echo "  all          - Build all plugins (default, CPU only)"
 	@echo "  kdensity2    - Build kdensity2 plugin only"
-	@echo "  kdensity2_cuda - Build kdensity2 with CUDA acceleration (requires nvcc)"
+	@echo "  kdensity2_cuda - Build kdensity2 with CUDA (hidden feature, requires nvcc)"
+	@echo "  nwreg_cuda   - Build nwreg with CUDA (hidden feature, requires nvcc)"
 	@echo "  clean        - Remove all built files"
 	@echo "  install      - Install all plugins (and single_ado) to ~/ado/plus/"
 	@echo "  dist         - Package plugins (and single_ado) to ado/ directory"

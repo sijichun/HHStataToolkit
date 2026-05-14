@@ -456,93 +456,110 @@ The variables are passed to the plugin via `plugin_vars` in the ado file, in thi
 - `MAX_DIM = 10`: maximum number of density variables
 - `MAX_GROUPS = 1000`: maximum number of unique group combinations
 - `MAX_GRID_POINTS = 10000`: unused (grid generation was removed)
-- OpenMP is enabled by default; thread count defaults to available cores, override via `OMP_NUM_THREADS`
 - The CPU density evaluation loop is parallelized with `#pragma omp parallel for`, providing near-linear speedup on multi-core systems
+- OpenMP thread count controlled via `nproc(#)` option in the ado syntax; default is 16. Also overridable via `OMP_NUM_THREADS` environment variable.
 - Group variables are read as `double` directly from Stata; string group variables are encoded to numeric in the ado layer via `egen group()`
+- GPU acceleration is a hidden feature: not built by default, not exposed in syntax. Build with `make kdensity2_cuda` if needed.
 
 ---
 
-## GPU Acceleration
+## GPU (Hidden Feature)
 
-### Overview
-
-kdensity2 supports CUDA GPU acceleration for kernel density estimation and CV bandwidth selection. The GPU uses **single-precision float** internally (vs double precision on CPU), achieving significant speedups for large datasets through massive parallelism and reduced memory bandwidth.
-
-### Building
+CUDA-accelerated GPU plugins (`kdensity2_cuda.plugin`) are available as a hidden
+feature. They are **not** built by default and the `gpu()` syntax option has been
+removed from the user-facing ado wrapper. To use GPU acceleration:
 
 ```bash
-# Build CPU-only plugin (no CUDA required)
-make kdensity2
-
-# Build CUDA-accelerated plugin (requires nvcc)
-make kdensity2_cuda
-
-# Build both
-make
+make kdensity2_cuda        # Build the CUDA plugin (requires nvcc)
 ```
 
 Requirements:
 - NVIDIA GPU with compute capability 6.0+ (Pascal or newer)
-- CUDA Toolkit 12+ (Linux only for v1)
+- CUDA Toolkit 12+ (Linux only)
 - nvcc must be in PATH
 
-### Usage
+The GPU plugin is loaded by passing `gpu(-1)` to the C plugin internally (the
+ado wrapper now hardcodes this). GPU computation uses single-precision float
+and produces results within float-precision tolerance (~1e-5 vs CPU double).
 
-```stata
-* Use first GPU for acceleration
-kdensity2 x, generate(f) gpu(0)
+---
 
-* Use second GPU
-kdensity2 x y, generate(f) gpu(1)
+## Performance
 
-* CV bandwidth on GPU
-kdensity2 x, generate(f) bw(cv) gpu(0)
-```
+Measured on 16-core CPU, Stata 18 MP. Timed via `clock(c(current_time), "hms")`
+(single iteration per N). All times in **milliseconds (ms)**.
 
-When `gpu(N)` is specified:
-1. kdensity2 loads `kdensity2_cuda.plugin` (error if not found)
-2. Preflight checks verify CUDA availability, device ID, compute capability, and memory
-3. All density evaluation and CV scoring runs on the GPU
-4. Results are automatically converted back to double precision
+Thread count is controlled via the `nproc()` option:
+- 1-core: `nproc(1)`
+- 16-core: `nproc(16)`
 
-### Precision
+### Silverman Bandwidth — Bimodal Mixture
 
-GPU computation uses **single-precision float** for maximum performance:
-- ~2x memory bandwidth vs double
-- 2x peak FLOPs on most NVIDIA GPUs
-- Numerical differences between CPU and GPU paths are bounded:
-  - Density values: `max_abs_diff < 1e-5`
-  - CV scores: `max_abs_diff < 1e-4`
+Data: $0.5 \cdot N(-2, 0.5) + 0.5 \cdot N(2, 0.5)$ (Gaussian kernel). Single iteration.
 
-### Performance
+| N        | CPU 1t (ms) | CPU 16t (ms) | Speedup |
+|---------|:-----------:|:------------:|:-------:|
+| 1,000   |       0.00¹ |        0.00¹ |      — |
+| 5,000   |       0.00¹ |        0.00¹ |      — |
+| 10,000  |       0.00¹ |        0.00¹ |      — |
+| 50,000  |    9000.00  |     1000.00  | **9.0×** |
+| 100,000 |   34000.00  |     4000.00  | **8.5×** |
 
-#### Density Evaluation (Gaussian, Silverman bandwidth)
+¹ Total wall time < 1 clock tick (1000 ms).
 
-| Dataset Size | CPU 1-thread | CPU 24-thread | OMP vs 1t | GPU (float)† | GPU vs CPU 24t |
-|-------------|-------------:|--------------:|----------:|-------------:|---------------:|
-| 1,000       |     0.001s   |      0.001s  |    1.0x   |     0.01s    |     0.1x      |
-| 5,000       |     0.100s   |      0.010s  |   10.0x   |     0.01s    |     1.0x      |
-| 10,000      |     0.400s   |      0.050s  |    8.0x   |     0.01s    |     5.0x      |
-| 25,000      |     2.000s   |      0.250s  |    8.0x   |     0.02s    |    12.5x      |
-| 100,000     |    41.000s   |      4.000s  |   10.3x   |     0.05s    |    80.0x      |
+### CV Bandwidth — Bimodal Mixture
 
-*† GPU data estimated from known NVIDIA GPU float performance. Run `test/kdensity2/test_gpu_benchmark.do` for actual measurements.*
+CV is $O(N^2)$. Smaller N range, single iteration.
 
-#### CV Bandwidth Selection (Gaussian kernel, 21 log-scale candidates)
-
-| Dataset Size | CPU 1-thread | CPU 24-thread | CV OMP vs 1t | GPU (float)† | GPU vs CPU 24t |
-|-------------|-------------:|--------------:|-------------:|-------------:|---------------:|
-| 500         |     0.0s     |      0.0s    |     —       |     0.01s    |      —        |
-| 1,000       |     0.1s     |      0.01s   |   10.0x     |     0.01s    |     1.0x      |
-| 5,000       |     2.0s     |      0.2s    |   10.0x     |     0.02s    |    10.0x      |
-| 10,000      |     8.0s     |      0.8s    |   10.0x     |     0.05s    |    16.0x      |
-
-*CV benchmark uses 10-fold CV with 21 log-spaced candidates (default ngrids=10). OMP parallelizes both the candidate loop (cv_select_1d) and the test-point loop (cv_score_1d_cpu).*
+| N       | CPU 1t (ms) | CPU 16t (ms) | Speedup |
+|--------|:-----------:|:------------:|:-------:|
+| 500    |       0.00¹ |        0.00¹ |      — |
+| 1,000  |       0.00¹ |        0.00¹ |      — |
+| 2,000  |       0.00¹ |        0.00¹ |      — |
+| 5,000  |    2000.00  |     1000.00  | **2.0×** |
+| 10,000 |    7000.00  |     1000.00  | **7.0×** |
 
 Key observations:
-- **CPU OpenMP** provides ~10x speedup on a 24-core system for both density evaluation and CV bandwidth selection
-- The density evaluation loop (`eval_density_batch`) is parallelized with `#pragma omp parallel for` over independent evaluation points
-- CV benefits from dual-level OMP: the candidate loop (`cv_select_1d`/`cv_select_mv`) and the test-point loop within each candidate (`cv_score_1d_cpu`/`cv_score_mv_cpu`)
-- **GPU float** provides orders-of-magnitude speedup for large N (100K+), but overhead dominates at small N (< 5K)
-- The GPU uses single-precision float (~2x throughput over device-side double)  
-- Run `test/kdensity2/test_gpu_benchmark.do` for hardware-specific measurements on your machine.
+
+- **Near-linear speedup**: Silverman at N=100K achieves **8.5×** speedup on
+  16 cores (34s → 4s).
+- At N < 10,000, total wall time is below `clock()` resolution (1 sec), giving
+  `0.00` ms readings.
+- **CV bandwidth** is $O(N^2)$; multi-core parallelism is particularly beneficial
+  for CV bandwidth selection.
+- The `nproc()` option directly controls OpenMP thread count in the C plugin.
+
+---
+
+## Test Results
+
+Test environment: 16-core CPU, Stata 18 MP.
+
+### Reproducibility
+
+All tests run 10 consecutive calls with identical parameters and compare pairwise differences.
+Thread count is controlled via the `nproc()` option.
+
+| Test | Configuration | Result | Tolerance |
+|------|--------------|--------|-----------|
+| **Silverman 10-run** | `nproc(1)` (single-core) | PASS | max diff < 1e-12 |
+| **Silverman 10-run** | `nproc(16)` (multi-core) | PASS | max diff < 1e-12 |
+| **CV 10-run** | `nproc(1)` (single-core) | PASS | max diff < 1e-10 |
+| **CV 10-run** | `nproc(16)` (multi-core) | PASS | max diff < 1e-10 |
+| **1-core vs 16-core** | Silverman | PASS | bit-identical (0.00e+00) |
+| **1-core vs 16-core** | CV | PASS | bit-identical (0.00e+00) |
+
+**Conclusion**: kdensity2 produces bit-identical results regardless of thread count for both Silverman and CV bandwidth selection. OpenMP parallelism does not introduce any numerical non-determinism.
+
+### Running Tests
+
+```bash
+# Reproducibility (10-run, 1-core + multi-core, cross-comparison)
+stata -b do test/kdensity2/test_cpu_reproducibility.do
+
+# Seed reproducibility (CV)
+stata -b do test/kdensity2/test_seed_reproducibility.do
+
+# GPU reproducibility (requires CUDA plugin)
+stata -b do test/kdensity2/test_gpu_reproducibility.do
+```

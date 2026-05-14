@@ -12,4 +12,7 @@ __pycache__/
 *.pyd
 *.swp
 *.dta
+test/ols/test_ols
+test/ols/test_ols_cuda*
+test/fangorn/test_rf_*
 TODO.md

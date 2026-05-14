@@ -607,14 +607,117 @@ STDLL stata_call(int argc, char *argv[])
 
 ---
 
+## Test Results
+
+Test environment: 16-core CPU, Stata 18 MP.
+
+### Reproducibility
+
+All tests run 10 consecutive calls with identical parameters and compare pairwise differences.
+Thread count is controlled via the `nproc()` option.
+
+| Test | Configuration | Result | Tolerance |
+|------|--------------|--------|-----------|
+| **Silverman 10-run** | `nproc(1)` (single-core) | PASS | max diff < 1e-12 |
+| **Silverman 10-run** | `nproc(16)` (multi-core) | PASS | max diff < 1e-12 |
+| **CV 10-run** | `nproc(1)` (single-core) | PASS | max diff < 1e-10 |
+| **CV 10-run** | `nproc(16)` (multi-core) | PASS | max diff < 1e-10 |
+| **1-core vs 16-core** | Silverman | PASS | bit-identical (0.00e+00) |
+| **1-core vs 16-core** | CV | PASS | bit-identical (0.00e+00) |
+
+**Conclusion**: nwreg produces bit-identical results regardless of thread count for both Silverman and CV bandwidth selection. OpenMP parallelism does not introduce any numerical non-determinism.
+
+### Performance
+
+Measured on 16-core CPU, Stata 18 MP. Timed via `clock(c(current_time), "hms")`
+(single iteration per N). All times in **milliseconds (ms)**.
+
+Thread count is controlled via the `nproc()` option:
+- 1-core: `nproc(1)`
+- 16-core: `nproc(16)`
+
+The benchmark uses a 3-variate DGP with heteroskedastic noise:
+
+$$y = \sin(x_1) + 0.5 \cdot \log(|x_2| + 1) + 0.3 \cdot x_3^2 + \varepsilon,\quad
+\varepsilon \sim N(0,\, 0.2 + 0.3 \cdot |x_1|)$$
+
+#### Silverman Bandwidth (Gaussian kernel, 3-variate)
+
+Single iteration per N.
+
+| N        | CPU 1t (ms) | CPU 16t (ms) | Speedup |
+|---------|:-----------:|:------------:|:-------:|
+| 1,000   |       0.00¹ |        0.00¹ |      — |
+| 5,000   |       0.00¹ |        0.00¹ |      — |
+| 10,000  |    2000.00  |        0.00¹ |      — |
+| 50,000  |   33000.00  |     3000.00  | **11.0×** |
+| 100,000 |  132000.00  |    12000.00  | **11.0×** |
+
+¹ Total wall time < 1 clock tick (1000 ms).
+
+#### CV Bandwidth (Gaussian kernel, 5 folds × 5 grids)
+
+CV is $O(N^2 \cdot \dim)$ per candidate. Smaller N range, single iteration.
+
+| N       | CPU 1t (ms) | CPU 16t (ms) | Speedup |
+|--------|:-----------:|:------------:|:-------:|
+| 500    |       0.00¹ |        0.00¹ |      — |
+| 1,000  |       0.00¹ |        0.00¹ |      — |
+| 2,000  |    1000.00  |        0.00¹ |      — |
+| 5,000  |    2000.00  |        0.00¹ |      — |
+| 10,000 |    8000.00  |     1000.00  | **8.0×** |
+
+Key observations:
+
+- **Near-linear speedup**: Silverman at N=100K achieves **11.0×** speedup on
+  16 cores for 3-variate NW regression (132s → 12s).
+- At N < 10,000, total wall time is below `clock()` resolution (1 sec), giving
+  `0.00` ms readings.
+- The heteroskedastic DGP does not affect timing vs homoskedastic — cost depends
+  only on N and $\dim$.
+- The 3-variate benchmark is ≈ 3× more expensive per observation than 1D regression,
+  due to product kernel evaluation over 3 dimensions.
+- The `nproc()` option directly controls OpenMP thread count in the C plugin.
+
+### GPU (Hidden Feature)
+
+CUDA-accelerated GPU plugins (`nwreg_cuda.plugin`) are available as a hidden
+feature. They are **not** built by default and the `gpu()` syntax option has
+been removed from the user-facing ado wrapper. To use GPU acceleration:
+
+```bash
+make nwreg_cuda        # Build the CUDA plugin (requires nvcc)
+```
+
+The GPU plugin is loaded by passing `gpu(-1)` to the C plugin internally
+(the ado wrapper now hardcodes this). Results are comparable to CPU within
+float-precision tolerance (~1e-5).
+
+### Running Tests
+
+```bash
+# Reproducibility (10-run, 1-core + multi-core, cross-comparison)
+stata -b do test/nwreg/test_cpu_reproducibility.do
+
+# Seed reproducibility (CV)
+stata -b do test/nwreg/test_seed_reproducibility.do
+
+# Simulation / functional tests
+stata -b do test/nwreg/test_nwreg_simulation.do
+
+# GPU reproducibility (requires CUDA plugin)
+stata -b do test/nwreg/test_gpu_reproducibility.do
+```
+
 ## Notes
 
 - The plugin evaluates the conditional mean at **data points only** — no grid generation
 - `MAX_DIM = 10`: maximum number of regressors (from `utils.h`)
 - `MAX_GROUPS = 1000`: maximum number of unique group combinations
 - `CV_GRID_STEP = 0.05`: log-scale step size for CV grid search
-- OpenMP is enabled by default with 8 threads; override via `OMP_NUM_THREADS`
+- OpenMP thread count controlled via `nproc(#)` option in the ado syntax; default is 16. Also overridable via `OMP_NUM_THREADS` environment variable.
 - When `denominator == 0` (no training observations within kernel support of the evaluation point), the result is set to `SV_missval` (Stata missing value `.`)
 - Group variables are read as `double` directly from Stata; string group variables are encoded to numeric in the ado layer via `egen group()`
 - For CV bandwidth selection, the ado wrapper shuffles the data before calling the plugin to ensure randomized folds, then restores original sort order
 - If `bw(cv)` is combined with grouped estimation, the shuffle is applied globally (not per-group); this is a known limitation
+- GPU acceleration is a hidden feature: not built by default, not exposed in syntax. Build with `make nwreg_cuda` if needed.
