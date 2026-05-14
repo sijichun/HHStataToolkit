@@ -460,7 +460,7 @@ typedef struct {
 } unique_groups_t;
 ```
 
-Stores the set of unique multi-dimensional group combinations. The `values` matrix is pre-allocated for up to `MAX_GROUPS` (1000) combinations.
+Stores the set of unique multi-dimensional group combinations. The `values` matrix is pre-allocated for up to `MAX_GROUPS` (50000) combinations.
 
 ---
 
@@ -470,7 +470,7 @@ Stores the set of unique multi-dimensional group combinations. The `values` matr
 static unique_groups_t* init_unique_groups(int ngroup)
 ```
 
-**Purpose**: Allocate and initialize the group storage structure. Pre-allocates space for `MAX_GROUPS` (1000) unique combinations, each with `ngroup` variables.
+**Purpose**: Allocate and initialize the group storage structure. Pre-allocates space for `MAX_GROUPS` (50000) unique combinations, each with `ngroup` variables.
 
 **Returns**: Pointer to newly allocated `unique_groups_t`, or `NULL` on allocation failure.
 
@@ -713,7 +713,7 @@ stata -b do test/nwreg/test_gpu_reproducibility.do
 
 - The plugin evaluates the conditional mean at **data points only** — no grid generation
 - `MAX_DIM = 10`: maximum number of regressors (from `utils.h`)
-- `MAX_GROUPS = 1000`: maximum number of unique group combinations
+- `MAX_GROUPS = 50000`: maximum number of unique group combinations
 - `CV_GRID_STEP = 0.05`: log-scale step size for CV grid search
 - OpenMP thread count controlled via `nproc(#)` option in the ado syntax; default is 16. Also overridable via `OMP_NUM_THREADS` environment variable.
 - When `denominator == 0` (no training observations within kernel support of the evaluation point), the result is set to `SV_missval` (Stata missing value `.`)

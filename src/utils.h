@@ -187,6 +187,6 @@ void stata_printf(const char *fmt, ...);
 #endif
 
 /* Group Limits (moved from plugin-specific .c files) */
-#define MAX_GROUPS  5000
+#define MAX_GROUPS  50000
 
 #endif

@@ -137,7 +137,7 @@ filter externally.
 - Plugins read ALL data into C arrays first. Memory = `n_obs × n_vars`.
 - `SF_nvar()` returns TOTAL dataset variables — **never** use for index math.
 - Use `alloc_double_array()`, `alloc_double_matrix()` from `utils.c`. Always `free()`.
-- Limits: `MAX_DIM=10`, `MAX_GRID_POINTS=10000`, `MAX_GROUPS=1000`.
+- Limits: `MAX_DIM=10`, `MAX_GRID_POINTS=10000`, `MAX_GROUPS=50000`.
 
 ### Stata return values
 `count` / `summarize` / `tabulate` **overwrite all `r()` scalars**. Save to a local

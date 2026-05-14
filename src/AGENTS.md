@@ -35,7 +35,7 @@ Defaults to 8 threads unless `OMP_NUM_THREADS` is set.
 |----------|-------|---------|
 | `MAX_DIM` | 10 | Max density/regression dimensions |
 | `MAX_GRID_POINTS` | 10000 | Max grid points (mostly unused) |
-| `MAX_GROUPS` | 1000 | Max unique group combinations |
+| `MAX_GROUPS` | 50000 | Max unique group combinations |
 | `MAX_VARNAME_LEN` | 32 | Max Stata variable name length |
 
 ## Conventions

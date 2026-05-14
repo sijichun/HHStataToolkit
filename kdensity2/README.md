@@ -329,7 +329,7 @@ Stores the set of unique multi-dimensional group combinations.
 static unique_groups_t* init_unique_groups(int ngroup)
 ```
 
-**Purpose**: Allocate and initialize the group storage structure. Pre-allocates space for `MAX_GROUPS` (1000) unique combinations.
+**Purpose**: Allocate and initialize the group storage structure. Pre-allocates space for `MAX_GROUPS` (50000) unique combinations.
 
 ---
 
@@ -454,7 +454,7 @@ The variables are passed to the plugin via `plugin_vars` in the ado file, in thi
 
 - The plugin evaluates density at **data points only** — no grid generation
 - `MAX_DIM = 10`: maximum number of density variables
-- `MAX_GROUPS = 1000`: maximum number of unique group combinations
+- `MAX_GROUPS = 50000`: maximum number of unique group combinations
 - `MAX_GRID_POINTS = 10000`: unused (grid generation was removed)
 - The CPU density evaluation loop is parallelized with `#pragma omp parallel for`, providing near-linear speedup on multi-core systems
 - OpenMP thread count controlled via `nproc(#)` option in the ado syntax; default is 16. Also overridable via `OMP_NUM_THREADS` environment variable.

@@ -56,7 +56,7 @@ K-fold cross-validation minimizing mean squared prediction error.
 
 {phang}{opt target(varname)}: 0/1 variable; target=0 is training set.
 
-{phang}{opt group(varlist)}: grouping variables for separate estimation.
+{phang}{opt group(varlist)}: grouping variables for separate estimation.  Maximum {cmd:50000} unique combinations across all group variables.
 
 {phang}{opt mincount(#)}: skip groups with fewer than # observations.
 
