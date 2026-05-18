@@ -29,6 +29,9 @@ DecisionTree *create_tree(void)
 void free_tree(DecisionTree *tree)
 {
     if (!tree) return;
+    int i;
+    for (i = 0; i < tree->n_nodes; i++)
+        free(tree->nodes[i].class_probs);
     free(tree->nodes);
     free(tree);
 }
@@ -55,6 +58,7 @@ int add_node_to_tree(DecisionTree *tree, int depth, int heap_id, int parent_id)
     n->leaf_value         = 0.0;
     n->leaf_impurity      = 0.0;
     n->n_samples          = 0;
+    n->class_probs        = NULL;
     n->left_child         = -1;
     n->right_child        = -1;
     return tree->n_nodes++;
@@ -73,22 +77,31 @@ void make_leaf(DecisionTree *tree, int node_idx,
     node->leaf_impurity = imp_fn(data->y, sample_idx, n_samples, params->n_classes);
 
     if (params->is_classifier) {
-        int *counts = (int *)calloc((size_t)params->n_classes, sizeof(int));
+        int n_classes = params->n_classes;
+        int *counts = (int *)calloc((size_t)n_classes, sizeof(int));
         int best_class = 0, best_count = 0, c;
         if (counts) {
             for (i = 0; i < n_samples; i++) {
                 c = (int)data->y[sample_idx[i]];
-                if (c >= 0 && c < params->n_classes) counts[c]++;
+                if (c >= 0 && c < n_classes) counts[c]++;
             }
-            for (c = 0; c < params->n_classes; c++) {
+            for (c = 0; c < n_classes; c++) {
                 if (counts[c] > best_count) {
                     best_count = counts[c];
                     best_class = c;
                 }
             }
-            free(counts);
         }
         node->leaf_value = (double)best_class;
+
+        node->class_probs = (double *)calloc((size_t)n_classes, sizeof(double));
+        if (node->class_probs) {
+            double inv_n = (n_samples > 0) ? 1.0 / (double)n_samples : 0.0;
+            for (c = 0; c < n_classes; c++)
+                node->class_probs[c] = (double)counts[c] * inv_n;
+        }
+
+        free(counts);
     } else {
         double sum = 0.0;
         for (i = 0; i < n_samples; i++) sum += data->y[sample_idx[i]];
@@ -255,6 +268,24 @@ double predict_tree(const DecisionTree *tree, const Dataset *data, int obs_idx)
     return tree->nodes[cur].leaf_value;
 }
 
+double predict_tree_prob(const DecisionTree *tree, const Dataset *data,
+                         int obs_idx, int class_idx)
+{
+    int cur = 0;
+    while (!tree->nodes[cur].is_leaf) {
+        int feat = tree->nodes[cur].split_feature;
+        double thr = tree->nodes[cur].split_threshold;
+        int nxt = (data->X[feat][obs_idx] <= thr)
+                  ? tree->nodes[cur].left_child
+                  : tree->nodes[cur].right_child;
+        if (nxt < 0) break;
+        cur = nxt;
+    }
+    if (tree->nodes[cur].class_probs)
+        return tree->nodes[cur].class_probs[class_idx];
+    return 0.0;
+}
+
 int get_leaf_id(const DecisionTree *tree, const Dataset *data, int obs_idx)
 {
     int cur = 0;
@@ -332,9 +363,20 @@ int export_tree_mermaid(const DecisionTree *tree, const char *filename,
 
         if (node->is_leaf) {
             if (params->is_classifier) {
-                fprintf(fp, "    N%d[[\"class=%.0f<br>n=%d<br>impurity=%.4f\"]]\n",
-                        node->node_id, node->leaf_value,
-                        node->n_samples, node->leaf_impurity);
+                if (node->class_probs && params->n_classes <= 10) {
+                    fprintf(fp, "    N%d[[\"probs=", node->node_id);
+                    int ci;
+                    for (ci = 0; ci < params->n_classes; ci++) {
+                        if (ci > 0) fputc(' ', fp);
+                        fprintf(fp, "%.3f", node->class_probs[ci]);
+                    }
+                    fprintf(fp, "<br>n=%d<br>imp=%.4f\"]]\n",
+                            node->n_samples, node->leaf_impurity);
+                } else {
+                    fprintf(fp, "    N%d[[\"class=%.0f<br>n=%d<br>impurity=%.4f\"]]\n",
+                            node->node_id, node->leaf_value,
+                            node->n_samples, node->leaf_impurity);
+                }
             } else {
                 fprintf(fp, "    N%d[[\"predict=%.4f<br>n=%d<br>MSE=%.4f\"]]\n",
                         node->node_id, node->leaf_value,
@@ -601,4 +643,21 @@ int predict_forest_class(RandomForest *forest, Dataset *data, int obs_idx, int n
 
     free(votes);
     return best_class;
+}
+
+double predict_forest_prob(RandomForest *forest, Dataset *data,
+                           int obs_idx, int n_classes, int class_idx)
+{
+    int t, count;
+    double total;
+
+    (void)n_classes;
+    total = 0.0;
+    count = 0;
+    for (t = 0; t < forest->ntree; t++) {
+        if (!forest->trees[t]) continue;
+        total += predict_tree_prob(forest->trees[t], data, obs_idx, class_idx);
+        count++;
+    }
+    return (count > 0) ? total / (double)count : 0.0;
 }

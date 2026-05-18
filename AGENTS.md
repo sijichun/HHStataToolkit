@@ -1,9 +1,10 @@
 # HHStataToolkit — Agent Guide
 
-**Updated:** 2026-05-14 · **Branch:** main
+**Updated:** 2026-05-15 · **Branch:** main
 
 Stata plugin collection: kernel density (`kdensity2`), kernel regression (`nwreg`),
-random forest (`fangorn`). C plugins + ado wrappers + pure-Stata utilities (`dta2md`, `bprecall`, etc.).
+random forest (`fangorn`), partially linear model via DML (`xpofangorn`).
+C plugins + ado wrappers + pure-Stata utilities (`dta2md`, `bprecall`, etc.).
 
 ## Quick Start
 
@@ -44,6 +45,7 @@ src/                  # Shared C: stplugin.h/c (NEVER modify), utils.h/c, ols.h/
 kdensity2/            # Single-file C plugin + ado + sthlp
 nwreg/                # Single-file C plugin + ado + sthlp
 fangorn/              # Multi-file C: fangorn.c ent.c split.c utils_rf.c
+xpofangorn/           # DML partially linear model (pure Stata, calls fangorn)
 single_ado/           # Pure Stata commands (no compilation): dta2md, bprecall, csadensity, ...
 test/                 # Per-plugin subdirs; all tests are Stata .do files
 ```
@@ -63,7 +65,7 @@ run `make install`.
 to the do file's directory. `stata -e` echoes to stdout.
 
 **Documentation**: Every code change must check whether the following need updating:
-- Subproject `README.md` (e.g., `kdensity2/README.md`, `nwreg/README.md`)
+- Subproject `README.md` (e.g., `kdensity2/README.md`, `nwreg/README.md`, `xpofangorn/README.md`)
 - `.sthlp` help files (e.g., `kdensity2/kdensity2.sthlp`, `nwreg/nwreg.sthlp`)
 - Project root `README.md` (test results, feature tables)
 - `AGENTS.md` (agent instructions)
@@ -153,6 +155,7 @@ before calling them if you need previous `r()` values.
 | Add shared C utility | `src/utils.c` | Kernels, bandwidth, alloc helpers |
 | New single-file plugin | Copy `kdensity2/` pattern | Makefile PLUGINS += name |
 | New multi-file plugin | Copy `fangorn/` pattern | Custom Makefile target needed |
+| DML partially linear model | `xpofangorn/` | Pure Stata, calls fangorn with K-fold cross-fitting |
 | Pure Stata command | `single_ado/` | No compilation, just .ado + .sthlp |
 | Dataset documentation | `single_ado/dta2md.ado` | Export .dta metadata to Markdown for LLMs |
 | GPU code (hidden feature) | `kdensity2/kdensity2_cuda.cu` | Float internally, tolerance 1e-5 |

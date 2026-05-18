@@ -139,14 +139,40 @@ program define fangorn, rclass
         }
     }
     
-    /* Generate prediction output variable (result) */
-    local pred_var = cond("`predname'" == "", "`generate'_pred", "`predname'")
-    capture confirm new variable `pred_var'
-    if _rc {
-        quietly replace `pred_var' = .
+    /* Determine number of probability output columns (nprob) */
+    local nprob = 1
+    local is_multi_class = 0
+    if "`type_opt'" == "classify" & `nclasses_opt' > 2 {
+        local nprob = `nclasses_opt'
+        local is_multi_class = 1
+    }
+    
+    /* Generate prediction output variable(s) */
+    if `is_multi_class' {
+        * Multi-class: generate K probability variables (one per class)
+        local pred_vars ""
+        forvalues ci = 0/`=`nprob'-1' {
+            local pv "`generate'_pred_`ci'"
+            capture confirm new variable `pv'
+            if _rc {
+                quietly replace `pv' = .
+            }
+            else {
+                quietly generate double `pv' = .
+            }
+            local pred_vars "`pred_vars' `pv'"
+        }
     }
     else {
-        quietly generate double `pred_var' = .
+        * Binary classify or regression: single prediction variable
+        local pred_var = cond("`predname'" == "", "`generate'_pred", "`predname'")
+        capture confirm new variable `pred_var'
+        if _rc {
+            quietly replace `pred_var' = .
+        }
+        else {
+            quietly generate double `pred_var' = .
+        }
     }
     
     /* Generate leaf_id output variable */
@@ -160,12 +186,17 @@ program define fangorn, rclass
     }
     
     /* Build variable list for plugin:
-     * indepvars depvar [target] [groupvars] result leaf_id touse
+     * indepvars depvar [target] [groupvars] result(s) leaf_id touse
      * C plugin expects: features(1..n_features) y(n_features+1) */
     local plugin_vars "`indepvars' `depvar'"
     if `ntarget' local plugin_vars "`plugin_vars' `target'"
     if `ngroup' > 0 local plugin_vars "`plugin_vars' `groupvars'"
-    local plugin_vars "`plugin_vars' `pred_var'"
+    if `is_multi_class' {
+        local plugin_vars "`plugin_vars' `pred_vars'"
+    }
+    else {
+        local plugin_vars "`plugin_vars' `pred_var'"
+    }
     local plugin_vars "`plugin_vars' `leaf_var'"
     local plugin_vars "`plugin_vars' `touse'"
     
@@ -204,6 +235,7 @@ program define fangorn, rclass
     local plugin_args "`plugin_args' mtry(`mtry')"
     local plugin_args "`plugin_args' ntiles(`ntiles')"
     local plugin_args "`plugin_args' nclasses(`nclasses_opt')"
+    local plugin_args "`plugin_args' nprob(`nprob')"
     local plugin_args "`plugin_args' nfeatures(`nindep')"
     local plugin_args "`plugin_args' ntarget(`ntarget')"
     local plugin_args "`plugin_args' ngroup(`ngroup')"
@@ -255,7 +287,24 @@ program define fangorn, rclass
         }
     }
     display as text "Observations:  " as result `nobs'
-    display as text "Prediction var:" as result " `pred_var'"
+    if `is_multi_class' {
+        display as text "Prediction vars:" as result `nprob' as text " (`generate'_pred_0 .. `generate'_pred_`=`nprob'-1')"
+        forvalues ci = 0/`=`nprob'-1' {
+            local pv "`generate'_pred_`ci'"
+            if "`type_opt'" == "classify" {
+                label variable `pv' "P(y=`ci' | X) [fangorn]"
+            }
+        }
+    }
+    else {
+        display as text "Prediction var:" as result " `pred_var'"
+        if "`type_opt'" == "classify" {
+            label variable `pred_var' "P(y=1 | X) [fangorn]"
+        }
+        else {
+            label variable `pred_var' "fangorn prediction"
+        }
+    }
     if `ntree' == 1 {
         display as text "Leaf ID var:   " as result " `leaf_var'"
     }
@@ -264,8 +313,7 @@ program define fangorn, rclass
     }
     display as text "{hline 40}"
     
-    /* Label output variables */
-    label variable `pred_var' "fangorn prediction"
+    /* Label leaf_id variable */
     if `ntree' == 1 {
         label variable `leaf_var' "fangorn leaf ID"
     }

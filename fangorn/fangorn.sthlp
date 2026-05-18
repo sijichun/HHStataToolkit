@@ -167,10 +167,19 @@ syntax parsing issue with long option lists.{p_end}
 {pstd}Two output variables are created:
 
 {pmore}
-{phang2}{it:prefix}_pred: predicted value.  For classification, this is the
-predicted class label (integer).  For regression, this is the predicted mean.
-With {cmd:ntree} > 1, predictions are aggregated across all trees (majority
-vote for classification, mean for regression).
+{phang2}{it:prefix}_pred: predicted value.{p_end}
+
+{phang2}For {bf:regression}: predicted conditional mean (average across
+all trees when {cmd:ntree} > 1).{p_end}
+
+{phang2}For {bf:classification}: predicted class {bf:probability} — {cmd:P(y=1|X)}
+for binary outcomes.  Each leaf stores the proportion of each class in its
+training sample; the forest averages these proportions across all trees.{p_end}
+
+{phang2}For {bf:multi-class classification} ({it:K} classes): {cmd:K}
+prediction variables are created: {it:prefix}_pred_0 through
+{it:prefix}_pred_{K-1}, storing {cmd:P(y=0|X)} through {cmd:P(y=K-1|X)}.
+Each variable is in [0,1] and they sum to 1 for every observation.{p_end}
 
 {phang2}{it:prefix}: leaf node ID (heap-style binary tree identifier).  Each
 unique value identifies a distinct leaf in the tree.  When {cmd:ntree} > 1,
@@ -226,6 +235,11 @@ Random forest with 100 trees, sampling 3 features per split.
 
 {phang2}. {cmd:fangorn y x1 x2, type(regress) generate(pred) ntree(50) seed(42)}{p_end}
 Regression random forest with 50 trees and reproducible seed.
+
+{phang2}. {cmd:fangorn y_multi x1 x2 x3, type(classify) generate(prob) ntree(100)}{p_end}
+Multi-class random forest (K=3, auto-detected).  Three probability variables
+created: {cmd:prob_pred_0}, {cmd:prob_pred_1}, {cmd:prob_pred_2}.  Each stores
+{classcmd:P(y=k|X)} and sums to 1 per observation.
 
 {marker references}{...}
 {title:References}

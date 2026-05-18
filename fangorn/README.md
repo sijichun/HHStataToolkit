@@ -81,6 +81,21 @@ $$
 
 Leaf prediction = mean of training y in leaf.
 
+#### Probability Output (Classification)
+
+Classification no longer returns the majority class label. Instead, each leaf
+stores the **full class proportion vector** (`class_probs[]`). The tree returns
+`class_probs[class_idx]` for a given class; the forest averages these
+proportions across all trees.
+
+- **Binary** (`nclasses=2`): `pred` = P(y=1|X) (continuous in [0,1])
+- **Multi-class** (`nclasses=K`): `pred_0`..`pred_{K-1}` = P(y=c|X)
+  for each class c (each continuous in [0,1], summing to 1 per observation)
+
+The internal `leaf_value` field still stores the majority class (used for OOB
+error computation and CV depth selection); external predictions are always
+probabilities.
+
 #### Split Quality
 
 Impurity decrease (information gain):
@@ -127,8 +142,10 @@ fangorn implements Breiman's Random Forest (2001) when `ntree > 1`:
   tree construction across threads, each with its own LCG state
 
 **Prediction** (`predict_forest`):
-- Regression: average of all tree predictions
-- Classification: majority vote across trees
+- Regression: average of all tree predictions (conditional mean)
+- Classification: probability output — leaf stores class proportions,
+  forest averages proportions across trees. Binary: `pred` = P(y=1|X).
+  Multi-class: `pred_0`, ..., `pred_{K-1}` = P(y=c|X) for each class.
 
 ### OOB Error
 
@@ -247,6 +264,13 @@ fangorn depvar indepvars, generate(name) [options]
 | `predname(name)` | Custom prediction var name | `generate_pred` |
 | `if(string)`/`in(string)` | Observation filters | all |
 
+**Prediction variables** (classification):
+
+| #classes | Generated variables | Content |
+|----------|-------------------|---------|
+| 2 (binary) | `generate_pred` | P(y=1\|X), continuous in [0,1] |
+| K (multi-class) | `generate_pred_0` .. `generate_pred_{K-1}` | P(y=c\|X) for each class c, each in [0,1], summing to 1 |
+
 ---
 
 ## Data Structures
@@ -348,7 +372,8 @@ Append node; doubles capacity on realloc. Returns array index or -1.
 
 #### `void make_leaf(DecisionTree *tree, int node_idx, const Dataset *data, const int *sample_idx, int n_samples, const TreeParams *params)`
 
-Set node as leaf. Classification: majority class. Regression: mean y.
+Set node as leaf. Classification: stores majority class in `leaf_value` (for
+OOB/CV), plus class proportions in `class_probs[]`. Regression: mean y.
 
 #### `int all_same_y(const Dataset *data, const int *sample_idx, int n_samples)`
 

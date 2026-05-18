@@ -21,6 +21,9 @@ PLUGINS = kdensity2 nwreg
 SINGLE_ADO_DIR = single_ado
 SINGLE_ADO_FILES = $(wildcard $(SINGLE_ADO_DIR)/*.ado)
 
+# xpofangorn — pure Stata command, no C compilation needed
+XPOFANGORN_DIR = xpofangorn
+
 # Detect platform
 UNAME_S := $(shell uname -s)
 
@@ -173,6 +176,11 @@ endif
 		fi; \
 		echo "  Installed $$base"; \
 	done
+	@echo "Installing xpofangorn..."
+	@mkdir -p ~/ado/plus/x
+	@cp $(XPOFANGORN_DIR)/xpofangorn.ado ~/ado/plus/x/ 2>/dev/null || true
+	@cp $(XPOFANGORN_DIR)/xpofangorn.sthlp ~/ado/plus/x/ 2>/dev/null || true
+	@echo "  Installed xpofangorn"
 	@echo "Installation complete."
 
 # Package: .plugin → ado/p/, .ado/.sthlp → ado/<letter>/
@@ -213,6 +221,11 @@ endif
 		fi; \
 		echo "  Packaged $$base"; \
 	done
+	@echo "Packaging xpofangorn..."
+	@mkdir -p ado/plus/x
+	@cp $(XPOFANGORN_DIR)/xpofangorn.ado ado/plus/x/ 2>/dev/null || true
+	@cp $(XPOFANGORN_DIR)/xpofangorn.sthlp ado/plus/x/ 2>/dev/null || true
+	@echo "  Packaged xpofangorn"
 	@echo "Package complete: ado/plus/ directory ready for distribution."
 
 help:

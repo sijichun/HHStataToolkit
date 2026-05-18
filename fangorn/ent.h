@@ -38,6 +38,7 @@ typedef struct {
     double leaf_value;          /* predicted value (class majority or mean) */
     double leaf_impurity;       /* impurity at this leaf */
     int    n_samples;           /* number of training samples in this node */
+    double *class_probs;        /* [n_classes] class proportions for classification, NULL for regression */
 
     int    left_child;          /* array index into tree->nodes[], -1 if none */
     int    right_child;         /* array index into tree->nodes[], -1 if none */
@@ -178,6 +179,14 @@ double predict_forest(RandomForest *forest, Dataset *data, int obs_idx);
 
 /* Classification ensemble prediction: majority vote across all trees. */
 int predict_forest_class(RandomForest *forest, Dataset *data, int obs_idx, int n_classes);
+
+/* Classification probability: returns P(y = class_idx | X) for a single tree. */
+double predict_tree_prob(const DecisionTree *tree, const Dataset *data,
+                         int obs_idx, int class_idx);
+
+/* Classification probability: average class proportion across all trees. */
+double predict_forest_prob(RandomForest *forest, Dataset *data,
+                           int obs_idx, int n_classes, int class_idx);
 
 /*
  * Export tree structure to a Mermaid flowchart file.

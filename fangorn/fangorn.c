@@ -131,7 +131,7 @@ STDLL stata_call(int argc, char *argv[])
     /* -----------------------------------------------------------------------
      * Parse argc/argv options
      * ----------------------------------------------------------------------- */
-    int n_features = 0, ntarget = 0, ngroup = 0, nclasses = 0;
+    int n_features = 0, ntarget = 0, ngroup = 0, nclasses = 0, nprob = 1;
     int ntree = 1;
     int max_depth = 20, min_samples_split = 2, min_samples_leaf = 1;
     double min_impurity_decrease = 0.0;
@@ -152,6 +152,7 @@ STDLL stata_call(int argc, char *argv[])
         if (extract_option_value(argv[i], "ntarget",             buf, sizeof(buf))) ntarget               = atoi(buf);
         if (extract_option_value(argv[i], "ngroup",              buf, sizeof(buf))) ngroup                = atoi(buf);
         if (extract_option_value(argv[i], "nclasses",            buf, sizeof(buf))) nclasses              = atoi(buf);
+        if (extract_option_value(argv[i], "nprob",               buf, sizeof(buf))) nprob                 = atoi(buf);
         if (extract_option_value(argv[i], "ntree",               buf, sizeof(buf))) ntree                 = atoi(buf);
         if (extract_option_value(argv[i], "maxdepth",            buf, sizeof(buf))) max_depth             = atoi(buf);
         if (extract_option_value(argv[i], "minsamplessplit",     buf, sizeof(buf))) min_samples_split     = atoi(buf);
@@ -198,15 +199,16 @@ STDLL stata_call(int argc, char *argv[])
      *   y:        n_features + 1
      *   target:   n_features + 2          (if ntarget > 0)
      *   group:    n_features + 2 + ntarget  .. n_features + 1 + ntarget + ngroup
-     *   result:   n_features + 2 + ntarget + ngroup
-     *   leaf_id:  n_features + 3 + ntarget + ngroup
-     *   touse:    n_features + 4 + ntarget + ngroup
+     *   result:   n_features + 2 + ntarget + ngroup    (nprob columns: for
+     *             multi-class probabilities, one per class)
+     *   leaf_id:  n_features + 2 + ntarget + ngroup + nprob
+     *   touse:    n_features + 3 + ntarget + ngroup + nprob
      * ----------------------------------------------------------------------- */
     int idx_y       = n_features + 1;
     int idx_target  = n_features + 2;
     int idx_result  = n_features + 2 + ntarget + ngroup;
-    int idx_leaf_id = idx_result  + 1;
-    int idx_touse   = idx_result  + 2;
+    int idx_leaf_id = idx_result  + nprob;
+    int idx_touse   = idx_result  + nprob + 1;
 
     /* -----------------------------------------------------------------------
      * Count observations
@@ -403,11 +405,27 @@ STDLL stata_call(int argc, char *argv[])
             free(feature_names);
         }
 
-        for (i = 0; i < n_obs; i++) {
-            double pred    = predict_tree(tree, &data, i);
-            double leaf_id = (double)get_leaf_id(tree, &data, i);
-            SF_vstore(idx_result,  stata_row[i], pred);
-            SF_vstore(idx_leaf_id, stata_row[i], leaf_id);
+        /* Single tree prediction */
+        if (is_classifier && nprob > 1) {
+            /* Multi-class: write one probability per result column */
+            for (i = 0; i < n_obs; i++) {
+                int ci;
+                for (ci = 0; ci < nprob; ci++)
+                    SF_vstore(idx_result + ci, stata_row[i],
+                              predict_tree_prob(tree, &data, i, ci));
+                SF_vstore(idx_leaf_id, stata_row[i], (double)get_leaf_id(tree, &data, i));
+            }
+        } else {
+            /* Binary classify (nprob==1 → P(y=1)) or regression */
+            for (i = 0; i < n_obs; i++) {
+                double pred;
+                if (is_classifier)
+                    pred = predict_tree_prob(tree, &data, i, 1);  /* P(y=1) */
+                else
+                    pred = predict_tree(tree, &data, i);
+                SF_vstore(idx_result,  stata_row[i], pred);
+                SF_vstore(idx_leaf_id, stata_row[i], (double)get_leaf_id(tree, &data, i));
+            }
         }
 
         free_tree(tree);
@@ -426,14 +444,27 @@ STDLL stata_call(int argc, char *argv[])
 
         build_random_forest(forest, &data, &params, train_idx, n_train, seed);
 
-        for (i = 0; i < n_obs; i++) {
-            double pred;
-            if (is_classifier)
-                pred = (double)predict_forest_class(forest, &data, i, nclasses);
-            else
-                pred = predict_forest(forest, &data, i);
-            SF_vstore(idx_result,  stata_row[i], pred);
-            SF_vstore(idx_leaf_id, stata_row[i], 0.0);
+        /* Random forest prediction */
+        if (is_classifier && nprob > 1) {
+            /* Multi-class: write one probability per result column */
+            for (i = 0; i < n_obs; i++) {
+                int ci;
+                for (ci = 0; ci < nprob; ci++)
+                    SF_vstore(idx_result + ci, stata_row[i],
+                              predict_forest_prob(forest, &data, i, nclasses, ci));
+                SF_vstore(idx_leaf_id, stata_row[i], 0.0);
+            }
+        } else {
+            /* Binary classify (nprob==1 → P(y=1)) or regression */
+            for (i = 0; i < n_obs; i++) {
+                double pred;
+                if (is_classifier)
+                    pred = predict_forest_prob(forest, &data, i, nclasses, 1);
+                else
+                    pred = predict_forest(forest, &data, i);
+                SF_vstore(idx_result,  stata_row[i], pred);
+                SF_vstore(idx_leaf_id, stata_row[i], 0.0);
+            }
         }
 
         SF_scal_save("__fangorn_oob_err", forest->oob_error);
