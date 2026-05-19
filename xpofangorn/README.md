@@ -32,6 +32,7 @@ xpofangorn depvar treatvar indepvars [, options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `generate(prefix)` | Save residuals as `prefix_ey`, `prefix_ew` | not saved |
+| `debug` | Shorthand for `generate(_xpofangorn)` | not saved |
 | `kfold(#)` | Number of cross-fitting folds | 5 |
 | `type(classify|regress)` | Force w model type | auto-detect |
 | `vce(robust|cluster(varname))` | Variance estimator | robust |
@@ -85,6 +86,10 @@ xpofangorn y w x1 x2, type(classify) ntree(200) vce(cluster city) generate(res)
 * Save residuals for diagnostic checking
 xpofangorn y w x1 x2 x3, generate(res)
 summarize res_ey res_ew
+
+* Quick debug: save residuals with default names
+xpofangorn y w x1 x2 x3, debug
+summarize _xpofangorn_ey _xpofangorn_ew
 ```
 
 ## Stored Results

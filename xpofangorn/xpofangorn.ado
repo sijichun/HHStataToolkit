@@ -24,6 +24,7 @@ program define xpofangorn, rclass
 
     syntax varlist(min=2 numeric) ///
         [, GENerate(string) ///
+            DEBUG ///
             KFOLD(integer 5) ///
             TYpe(string) ///
             VCE(string) ///
@@ -295,6 +296,11 @@ program define xpofangorn, rclass
     return local  vce      "`reg_vce'"
     if "`type'" != "" {
         return local  type  "`type'"
+    }
+
+    /* ---- Handle debug option: auto-save residuals with default prefix ---- */
+    if "`debug'" != "" & "`generate'" == "" {
+        local generate "_xpofangorn"
     }
 
     /* ---- Optionally generate residual variables ---- */

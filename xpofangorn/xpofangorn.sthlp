@@ -20,6 +20,7 @@
 {synoptline}
 {syntab:Main}
 {synopt :{opt generate(prefix)}}save residuals as {it:prefix}_ey and {it:prefix}_ew{p_end}
+{synopt :{opt debug}}equivalent to {cmd:generate(_xpofangorn)}; saves residuals for diagnostics{p_end}
 {synopt :{opt kfold(#)}}number of cross-fitting folds; default is 5{p_end}
 {synopt :{opt type(string)}}force w model type: {cmd:classify} or {cmd:regress}; default is auto-detect{p_end}
 {synopt :{opt vce(string)}}variance estimator: {cmd:robust} (default) or {cmd:cluster(varname)}{p_end}
@@ -81,6 +82,12 @@ otherwise regression.  Override with the {cmd:type()} option.{p_end}
 {it:prefix}_ey (residual of y) and {it:prefix}_ew (residual of w).  Useful for
 diagnostics and manual analysis.  Optional; residuals are always computed
 internally but only saved to the dataset when this option is specified.{p_end}
+
+{phang}{opt debug}: shorthand for {cmd:generate(_xpofangorn)}.  Saves the
+cross-fitted residuals as {cmd:_xpofangorn_ey} and {cmd:_xpofangorn_ew}.
+Useful for quick diagnostic checks without choosing a prefix name.  If both
+{cmd:debug} and {cmd:generate()} are specified, {cmd:generate()} takes
+precedence.{p_end}
 
 {phang}{opt kfold(#)}: number of cross-fitting folds.  Default is 5.
 Larger values (e.g. 10) reduce bias but increase computation time.  Must be
@@ -159,6 +166,9 @@ DML with random forest (100 trees) for a binary treatment, max depth 10.
 
 {phang2}. {cmd:xpofangorn y w x1 x2 x3, generate(res) vce(cluster city)}{p_end}
 DML with cluster-robust standard errors; residuals saved as res_ey, res_ew.
+
+{phang2}. {cmd:xpofangorn y w x1 x2 x3, debug}{p_end}
+DML with default residual names (_xpofangorn_ey, _xpofangorn_ew) for quick diagnostics.
 
 {phang2}. {cmd:xpofangorn y w x1 x2 x3, ntree(200) entcvdepth(5) seed(777)}{p_end}
 Random forest with 200 trees and 5-fold CV for depth selection.
