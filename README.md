@@ -8,7 +8,7 @@ decision trees, written in C. Includes standalone utility commands.
 | Plugin | Description | Key Features |
 |--------|-------------|--------------|
 | **kdensity2** | Kernel density estimation | 1D/MV, target split (train/predict), multi-group, product kernel, CV bandwidth. GPU acceleration via `make kdensity2_cuda` (hidden feature). |
-| **nwreg** | Nadaraya-Watson kernel regression | 1D/MV, target split (train/predict), multi-group, CV bandwidth, robust SE. GPU acceleration via `make nwreg_cuda` (hidden feature). |
+| **nwreg** | Nadaraya-Watson / local polynomial kernel regression | 1D/MV, target split (train/predict), multi-group, CV bandwidth, robust SE, local polynomial (`poly()`), derivatives (`derivatives()`). GPU acceleration via `make nwreg_cuda` (hidden feature). |
 | **fangorn** | CART decision tree / random forest | Gini/Entropy/MSE, pre-sorted splits, CV depth selection, OOB error, MDI importance, mtry, ntiles quantile strategy, Mermaid export |
 | **xpofangorn** | Partially linear model via DML | Double machine learning, K-fold cross-fitting, auto-detect binary/continuous treatment, robust and cluster SE, all fangorn options pass-through |
 
@@ -97,6 +97,8 @@ stata -b do test/fangorn/test_fangorn_seed_reproducibility.do
 # Functional tests
 stata -b do test/kdensity2/test_chi2_group.do
 stata -b do test/nwreg/test_nwreg_simulation.do
+stata -b do test/nwreg/test_local_polynomial.do
+stata -b do test/nwreg/test_local_polynomial_reproducibility.do
 stata -b do test/fangorn/test_fangorn_phase1.do
 stata -b do test/fangorn/test_fangorn_phase2.do
 stata -b do test/fangorn/test_fangorn_regularization.do

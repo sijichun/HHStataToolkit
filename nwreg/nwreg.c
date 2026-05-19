@@ -13,9 +13,11 @@
 
 #include "stplugin.h"
 #include "utils.h"
+#include "ols.h"
 
 #ifdef USE_CUDA
 #include "nwreg_cuda.h"
+#include "local_polynomial_cuda.h"
 #endif
 
 /* ============================================================================
@@ -269,6 +271,8 @@ static void compute_bw(double **train_x, int n_train, int dim,
             for (d = 0; d < dim; d++) h[d] = manual_h;
     }
 }
+
+#include "local_polynomial.c"
 
 /* ============================================================================
  * Cross-Validation for Bandwidth Selection (regression MSE)
@@ -666,6 +670,8 @@ STDLL stata_call(int argc, char *argv[])
     int se_type = 2;
     int minobs  = 0;
     int gpu_device = -1;
+    int poly    = 0;
+    int nderiv  = 0;
 
     /* ---- Parse argv ---- */
     int i;
@@ -729,6 +735,14 @@ STDLL stata_call(int argc, char *argv[])
             omp_set_dynamic(0);
 #endif
         }
+        else if (extract_option_value(arg, "poly", buf, sizeof(buf))) {
+            poly = atoi(buf);
+            if (poly < 0) poly = 0;
+        }
+        else if (extract_option_value(arg, "nderiv", buf, sizeof(buf))) {
+            nderiv = atoi(buf);
+            if (nderiv < 0) nderiv = 0;
+        }
     }
 
     ST_int n_obs = SF_nobs();
@@ -740,42 +754,37 @@ STDLL stata_call(int argc, char *argv[])
         return 1;
     }
 
+    if (poly > 1 && nreg > 1) {
+        SF_error("Error: poly > 1 is only supported for 1D regressors\n");
+        return 1;
+    }
+
 #ifdef USE_CUDA
-    if (gpu_device >= 0) {
-        int preflight = gpu_preflight_check(gpu_device, 0);
-        if (preflight != 0) {
-            char buf[128];
-            switch (preflight) {
-                case -1: snprintf(buf, sizeof(buf), "Error: No CUDA devices found\n"); break;
-                case -2: snprintf(buf, sizeof(buf), "Error: Invalid GPU device ID (%d)\n", gpu_device); break;
-                case -3: snprintf(buf, sizeof(buf), "Error: GPU compute capability < 6.0 not supported\n"); break;
-                case -4: snprintf(buf, sizeof(buf), "Error: Insufficient GPU memory\n"); break;
-                default: snprintf(buf, sizeof(buf), "Error: GPU preflight check failed (code %d)\n", preflight); break;
-            }
-            SF_error(buf);
-            return 1;
+    if (gpu_device < 0) gpu_device = 0;
+    int preflight = gpu_preflight_check(gpu_device, 0);
+    if (preflight != 0) {
+        char buf[128];
+        switch (preflight) {
+            case -1: snprintf(buf, sizeof(buf), "Error: No CUDA devices found\n"); break;
+            case -2: snprintf(buf, sizeof(buf), "Error: Invalid GPU device ID (%d)\n", gpu_device); break;
+            case -3: snprintf(buf, sizeof(buf), "Error: GPU compute capability < 6.0 not supported\n"); break;
+            case -4: snprintf(buf, sizeof(buf), "Error: Insufficient GPU memory\n"); break;
+            default: snprintf(buf, sizeof(buf), "Error: GPU preflight check failed (code %d)\n", preflight); break;
         }
+        SF_error(buf);
+        return 1;
     }
 #endif
 
     int dim = nreg;
 
-    /*
-     * Variable layout (1-based Stata indices):
-     *   1 .. nreg                          regressors (X)
-     *   nreg+1                             dependent variable (Y)
-     *   nreg+2 .. nreg+1+ntarget          target variable (0=train,1=test)
-     *   nreg+2+ntarget .. nreg+1+ntarget+ngroup  group variables
-     *   nreg+2+ntarget+ngroup              output (predicted y)
-     *   nreg+3+ntarget+ngroup              SE output (if nse>0)
-     *   nreg+3+ntarget+ngroup+nse          touse
-     */
     int idx_y            = nreg + 1;
-    int idx_target_start = nreg + 2;                          /* only used if ntarget > 0 */
-    int idx_group_start  = nreg + 2 + ntarget;               /* first group var */
+    int idx_target_start = nreg + 2;
+    int idx_group_start  = nreg + 2 + ntarget;
     int idx_result       = nreg + 2 + ntarget + ngroup;
     int idx_se           = (nse > 0) ? (nreg + 3 + ntarget + ngroup) : -1;
-    int idx_touse        = nreg + 3 + ntarget + ngroup + nse;
+    int idx_deriv_start  = (nderiv > 0) ? (nreg + 3 + ntarget + ngroup + nse) : -1;
+    int idx_touse        = nreg + 3 + ntarget + ngroup + nse + nderiv;
 
     if (n_obs < 2) {
         SF_error("Error: Need at least 2 observations\n");
@@ -789,11 +798,22 @@ STDLL stata_call(int argc, char *argv[])
     double **group    = (ngroup  > 0) ? alloc_double_matrix(ngroup, n_obs) : NULL;
     double *result    = alloc_double_array(n_obs);
     double *se_result = (nse > 0) ? alloc_double_array(n_obs) : NULL;
+    double **deriv_results = NULL;
+    if (nderiv > 0) {
+        deriv_results = (double**)malloc((size_t)nderiv * sizeof(double*));
+        if (deriv_results) {
+            int d;
+            for (d = 0; d < nderiv; d++) {
+                deriv_results[d] = alloc_double_array(n_obs);
+            }
+        }
+    }
     int    *in_if     = (int*)malloc(n_obs * sizeof(int));
 
     if (!reg_data || !y_data || !result || !in_if ||
         (ntarget > 0 && !target) || (ngroup > 0 && !group) ||
-        (nse > 0 && !se_result)) {
+        (nse > 0 && !se_result) ||
+        (nderiv > 0 && !deriv_results)) {
         SF_error("Error: Memory allocation failed\n");
         free(in_if);
         free_matrix(reg_data, dim);
@@ -802,14 +822,22 @@ STDLL stata_call(int argc, char *argv[])
         if (group) free_matrix(group, ngroup);
         free(result);
         free(se_result);
+        if (deriv_results) {
+            int d;
+            for (d = 0; d < nderiv; d++) free(deriv_results[d]);
+            free(deriv_results);
+        }
         return 1;
     }
 
-    /* ---- Initialise result and SE to Stata missing ---- */
     int j;
     for (j = 0; j < n_obs; j++) {
         result[j] = SV_missval;
         if (se_result) se_result[j] = SV_missval;
+        if (deriv_results) {
+            int d;
+            for (d = 0; d < nderiv; d++) deriv_results[d][j] = SV_missval;
+        }
     }
 
     /* ---- Read touse ---- */
@@ -922,77 +950,113 @@ STDLL stata_call(int argc, char *argv[])
                 }
             }
 
-            /* Select bandwidth */
             double *h = (double*)malloc(dim * sizeof(double));
             if (!h) {
                 free_matrix(train_x, dim);
                 free(train_y);
                 continue;
             }
-            compute_bw_cv(train_x, train_y, n_train_g, dim,
-                           bandwidth_rule, manual_h,
-                           cv_folds, cv_grids, kernel_type, h,
-                           gpu_device);
 
-            /* ---- Compute standard errors (if requested) ---- */
-            if (nse > 0) {
-                double *se_resid = alloc_double_array(n_train_g);
-                if (!se_resid) {
+            int n_eval_g = 0;
+            for (j = 0; j < n_obs; j++) {
+                if (in_if[j] && match_group_combo(group, ngroup, j, ug->values[i]))
+                    n_eval_g++;
+            }
+            int *eval_indices = (int*)malloc(n_eval_g * sizeof(int));
+            if (!eval_indices) {
+                free(h);
+                free_matrix(train_x, dim);
+                free(train_y);
+                continue;
+            }
+            {
+                int ei = 0;
+                for (j = 0; j < n_obs; j++) {
+                    if (in_if[j] && match_group_combo(group, ngroup, j, ug->values[i]))
+                        eval_indices[ei++] = j;
+                }
+            }
+
+            if (poly >= 1) {
+                compute_bw_cv_lp(train_x, train_y, n_train_g, dim,
+                                 bandwidth_rule, manual_h,
+                                 cv_folds, cv_grids, kernel_type, h, poly,
+                                 gpu_device);
+                if (eval_lp_batch(reg_data, dim, train_x, train_y,
+                                  n_train_g, h, kernel_type, poly,
+                                  eval_indices, n_eval_g,
+                                  result, deriv_results, nderiv,
+                                  gpu_device) != 0) {
+                    free(eval_indices);
                     free(h);
                     free_matrix(train_x, dim);
                     free(train_y);
-                    continue;
+                    free_unique_groups(ug);
+                    free(in_if);
+                    free_matrix(reg_data, dim);
+                    free(y_data);
+                    free(target);
+                    free(result);
+                    if (se_result) free(se_result);
+                    if (deriv_results) {
+                        int d;
+                        for (d = 0; d < nderiv; d++) free(deriv_results[d]);
+                        free(deriv_results);
+                    }
+                    return 1;
                 }
-                if (dim == 1) {
-                    compute_se_residuals_1d(train_x[0], train_y, n_train_g,
-                                             h[0], kernel_type, se_type,
-                                             se_resid);
-                } else {
-                    compute_se_residuals_mv(train_x, train_y, n_train_g,
-                                             dim, h, kernel_type, se_type,
-                                             se_resid);
-                }
+            } else {
+                compute_bw_cv(train_x, train_y, n_train_g, dim,
+                               bandwidth_rule, manual_h,
+                               cv_folds, cv_grids, kernel_type, h,
+                               gpu_device);
 
-                for (j = 0; j < n_obs; j++) {
-                    if (in_if[j] &&
-                        match_group_combo(group, ngroup, j, ug->values[i])) {
-                        if (dim == 1) {
-                            result[j] = nw_eval_1d_with_se(reg_data[0][j],
-                                                            train_x[0], train_y,
-                                                            se_resid,
-                                                            n_train_g, h[0],
-                                                            kernel_type,
-                                                            &se_result[j]);
-                        } else {
-                            double *x = (double*)malloc(dim * sizeof(double));
-                            if (x) {
-                                int d;
-                                for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
-                                result[j] = nw_eval_mv_with_se(x, train_x, train_y,
+                if (nse > 0) {
+                    double *se_resid = alloc_double_array(n_train_g);
+                    if (!se_resid) {
+                        free(eval_indices);
+                        free(h);
+                        free_matrix(train_x, dim);
+                        free(train_y);
+                        continue;
+                    }
+                    if (dim == 1) {
+                        compute_se_residuals_1d(train_x[0], train_y, n_train_g,
+                                                 h[0], kernel_type, se_type,
+                                                 se_resid);
+                    } else {
+                        compute_se_residuals_mv(train_x, train_y, n_train_g,
+                                                 dim, h, kernel_type, se_type,
+                                                 se_resid);
+                    }
+
+                    for (j = 0; j < n_obs; j++) {
+                        if (in_if[j] &&
+                            match_group_combo(group, ngroup, j, ug->values[i])) {
+                            if (dim == 1) {
+                                result[j] = nw_eval_1d_with_se(reg_data[0][j],
+                                                                train_x[0], train_y,
                                                                 se_resid,
-                                                                n_train_g, dim, h,
+                                                                n_train_g, h[0],
                                                                 kernel_type,
                                                                 &se_result[j]);
-                                free(x);
+                            } else {
+                                double *x = (double*)malloc(dim * sizeof(double));
+                                if (x) {
+                                    int d;
+                                    for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
+                                    result[j] = nw_eval_mv_with_se(x, train_x, train_y,
+                                                                    se_resid,
+                                                                    n_train_g, dim, h,
+                                                                    kernel_type,
+                                                                    &se_result[j]);
+                                    free(x);
+                                }
                             }
                         }
                     }
-                }
-                free(se_resid);
-            } else {
-                /* Evaluate NW estimator for ALL obs in this group (no SE) */
-                int n_eval_g = 0;
-                for (j = 0; j < n_obs; j++) {
-                    if (in_if[j] && match_group_combo(group, ngroup, j, ug->values[i]))
-                        n_eval_g++;
-                }
-                int *eval_indices = (int*)malloc(n_eval_g * sizeof(int));
-                if (eval_indices) {
-                    int ei = 0;
-                    for (j = 0; j < n_obs; j++) {
-                        if (in_if[j] && match_group_combo(group, ngroup, j, ug->values[i]))
-                            eval_indices[ei++] = j;
-                    }
+                    free(se_resid);
+                } else {
                     if (eval_regression_batch(reg_data, dim, train_x, train_y,
                                                n_train_g, h, kernel_type,
                                                eval_indices, n_eval_g,
@@ -1009,9 +1073,9 @@ STDLL stata_call(int argc, char *argv[])
                         free(result);
                         return 1;
                     }
-                    free(eval_indices);
                 }
             }
+            free(eval_indices);
 
             free(h);
             free_matrix(train_x, dim);
@@ -1076,15 +1140,46 @@ STDLL stata_call(int argc, char *argv[])
             return 1;
         }
 
-        compute_bw_cv(train_x, train_y, n_train, dim,
-                       bandwidth_rule, manual_h,
-                       cv_folds, cv_grids, kernel_type, h,
-                       gpu_device);
+        int n_eval = 0;
+        for (j = 0; j < n_obs; j++) {
+            if (in_if[j]) n_eval++;
+        }
+        int *eval_indices = (int*)malloc(n_eval * sizeof(int));
+        if (!eval_indices) {
+            free(h);
+            free_matrix(train_x, dim);
+            free(train_y);
+            free(in_if);
+            free_matrix(reg_data, dim);
+            free(y_data);
+            free(target);
+            free(result);
+            if (se_result) free(se_result);
+            if (deriv_results) {
+                int d;
+                for (d = 0; d < nderiv; d++) free(deriv_results[d]);
+                free(deriv_results);
+            }
+            return 1;
+        }
+        {
+            int ei = 0;
+            for (j = 0; j < n_obs; j++) {
+                if (in_if[j]) eval_indices[ei++] = j;
+            }
+        }
 
-        /* ---- Compute standard errors (if requested) ---- */
-        if (nse > 0) {
-            double *se_resid = alloc_double_array(n_train);
-            if (!se_resid) {
+        if (poly >= 1) {
+            compute_bw_cv_lp(train_x, train_y, n_train, dim,
+                             bandwidth_rule, manual_h,
+                             cv_folds, cv_grids, kernel_type, h, poly,
+                             gpu_device);
+            if (eval_lp_batch(reg_data, dim, train_x, train_y,
+                              n_train, h, kernel_type, poly,
+                              eval_indices, n_eval,
+                              result, deriv_results, nderiv,
+                              gpu_device) != 0) {
+                free(eval_indices);
                 free(h);
                 free_matrix(train_x, dim);
                 free(train_y);
@@ -1093,56 +1188,71 @@ STDLL stata_call(int argc, char *argv[])
                 free(y_data);
                 free(target);
                 free(result);
-                free(se_result);
+                if (se_result) free(se_result);
+                if (deriv_results) {
+                    int d;
+                    for (d = 0; d < nderiv; d++) free(deriv_results[d]);
+                    free(deriv_results);
+                }
                 return 1;
             }
-            if (dim == 1) {
-                compute_se_residuals_1d(train_x[0], train_y, n_train,
-                                         h[0], kernel_type, se_type,
-                                         se_resid);
-            } else {
-                compute_se_residuals_mv(train_x, train_y, n_train,
-                                         dim, h, kernel_type, se_type,
-                                         se_resid);
-            }
+        } else {
+            compute_bw_cv(train_x, train_y, n_train, dim,
+                           bandwidth_rule, manual_h,
+                           cv_folds, cv_grids, kernel_type, h,
+                           gpu_device);
 
-            for (j = 0; j < n_obs; j++) {
-                if (in_if[j]) {
-                    if (dim == 1) {
-                        result[j] = nw_eval_1d_with_se(reg_data[0][j],
-                                                        train_x[0], train_y,
-                                                        se_resid,
-                                                        n_train, h[0],
-                                                        kernel_type,
-                                                        &se_result[j]);
-                    } else {
-                        double *x = (double*)malloc(dim * sizeof(double));
-                        if (x) {
-                            int d;
-                            for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
-                            result[j] = nw_eval_mv_with_se(x, train_x, train_y,
+            if (nse > 0) {
+                double *se_resid = alloc_double_array(n_train);
+                if (!se_resid) {
+                    free(eval_indices);
+                    free(h);
+                    free_matrix(train_x, dim);
+                    free(train_y);
+                    free(in_if);
+                    free_matrix(reg_data, dim);
+                    free(y_data);
+                    free(target);
+                    free(result);
+                    free(se_result);
+                    return 1;
+                }
+                if (dim == 1) {
+                    compute_se_residuals_1d(train_x[0], train_y, n_train,
+                                             h[0], kernel_type, se_type,
+                                             se_resid);
+                } else {
+                    compute_se_residuals_mv(train_x, train_y, n_train,
+                                             dim, h, kernel_type, se_type,
+                                             se_resid);
+                }
+
+                for (j = 0; j < n_obs; j++) {
+                    if (in_if[j]) {
+                        if (dim == 1) {
+                            result[j] = nw_eval_1d_with_se(reg_data[0][j],
+                                                            train_x[0], train_y,
                                                             se_resid,
-                                                            n_train, dim, h,
+                                                            n_train, h[0],
                                                             kernel_type,
                                                             &se_result[j]);
-                            free(x);
+                        } else {
+                            double *x = (double*)malloc(dim * sizeof(double));
+                            if (x) {
+                                int d;
+                                for (d = 0; d < dim; d++) x[d] = reg_data[d][j];
+                                result[j] = nw_eval_mv_with_se(x, train_x, train_y,
+                                                                se_resid,
+                                                                n_train, dim, h,
+                                                                kernel_type,
+                                                                &se_result[j]);
+                                free(x);
+                            }
                         }
                     }
                 }
-            }
-            free(se_resid);
-        } else {
-            /* Evaluate NW estimator for ALL in-sample obs (no SE) */
-            int n_eval = 0;
-            for (j = 0; j < n_obs; j++) {
-                if (in_if[j]) n_eval++;
-            }
-            int *eval_indices = (int*)malloc(n_eval * sizeof(int));
-            if (eval_indices) {
-                int ei = 0;
-                for (j = 0; j < n_obs; j++) {
-                    if (in_if[j]) eval_indices[ei++] = j;
-                }
+                free(se_resid);
+            } else {
                 if (eval_regression_batch(reg_data, dim, train_x, train_y,
                                            n_train, h, kernel_type,
                                            eval_indices, n_eval,
@@ -1158,9 +1268,9 @@ STDLL stata_call(int argc, char *argv[])
                     free(result);
                     return 1;
                 }
-                free(eval_indices);
             }
         }
+        free(eval_indices);
 
         free(h);
         free_matrix(train_x, dim);
@@ -1174,18 +1284,20 @@ STDLL stata_call(int argc, char *argv[])
             if (nse > 0) {
                 SF_vstore(idx_se, j, se_result[j - 1]);
             }
+            if (nderiv > 0 && deriv_results) {
+                int d;
+                for (d = 0; d < nderiv; d++) {
+                    SF_vstore(idx_deriv_start + d, j, deriv_results[d][j - 1]);
+                }
+            }
         }
     }
 
-    /* ---- Summary output ---- */
-    stata_printf("Nadaraya-Watson kernel regression complete\n");
-    stata_printf("  Regressors: %d\n", nreg);
-    stata_printf("  Observations: %ld\n", (long)n_obs);
-    stata_printf("  Kernel: %s\n", get_kernel_name(kernel_type));
-    if (nse > 0) {
-        const char *se_name = (se_type == 1) ? "leave-one-out" :
-                               (se_type == 2) ? "leverage-corrected" : "full-sample";
-        stata_printf("  Standard errors: %s\n", se_name);
+    if (poly > 0) {
+        stata_printf("  Polynomial degree: %d (local polynomial regression)\n", poly);
+    }
+    if (nderiv > 0) {
+        stata_printf("  Derivatives: %d output(s)\n", nderiv);
     }
     if (ngroup > 0) {
         ST_double ng;
@@ -1194,7 +1306,6 @@ STDLL stata_call(int argc, char *argv[])
         stata_printf("  Groups: %d\n", (int)ng);
     }
 
-    /* ---- Free all memory ---- */
     free(in_if);
     free_matrix(reg_data, dim);
     free(y_data);
@@ -1202,6 +1313,11 @@ STDLL stata_call(int argc, char *argv[])
     if (group) free_matrix(group, ngroup);
     free(result);
     free(se_result);
+    if (deriv_results) {
+        int d;
+        for (d = 0; d < nderiv; d++) free(deriv_results[d]);
+        free(deriv_results);
+    }
 
     return 0;
 }

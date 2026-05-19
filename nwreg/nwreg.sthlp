@@ -27,7 +27,9 @@
 {synopt :{opt folds(#)}}CV folds (used with {cmd:bw(cv)}); default is 10{p_end}
 {synopt :{opt grids(#)}}CV grid candidates per side; default is 10{p_end}
 {synopt :{opt gen:erate(newvar)}}output variable; default is {cmd:nwreg}{p_end}
-{synopt :{opt se(newvar)}}standard error variable; if specified, computes a heteroskedasticity-robust local standard error for each prediction{p_end}
+{synopt :{opt poly(#)}}polynomial degree for local polynomial regression; default is 0 (Nadaraya-Watson){p_end}
+{synopt :{opt derivatives(prefix)}}prefix for derivative output variables; requires {cmd:poly(#>=1)}{p_end}
+{synopt :{opt se(newvar)}}standard error variable; not available with {cmd:poly()}{p_end}
 {synopt :{opt setype(#)}}SE computation method: 0=full-sample, 1=leave-one-out, 2=leverage-corrected (default){p_end}
 {synopt :{opt nproc(#)}}OpenMP threads for CPU parallelism; default is 16{p_end}
 {synopt :{opt if(exp)}}observations to include (use parentheses){p_end}
@@ -37,12 +39,13 @@
 {marker description}{...}
 {title:Description}
 
-{pstd}{cmd:nwreg} performs Nadaraya-Watson kernel regression.  It estimates
-E[Y|X] at each observation using kernel-weighted local averaging.  Supports
-target split (target=0 trains, all get predictions), grouped estimation with
-one or more categorical variables, and minimum group size filtering.
-Cross-validation bandwidth selection is available via {cmd:bw(cv)} with
-customizable folds and grid density.
+{pstd}{cmd:nwreg} performs Nadaraya-Watson kernel regression and local
+polynomial regression.  It estimates E[Y|X] at each observation using
+kernel-weighted local averaging (poly=0) or local polynomial fitting
+(poly>=1).  Supports target split (target=0 trains, all get predictions),
+grouped estimation with one or more categorical variables, and minimum
+group size filtering.  Cross-validation bandwidth selection is available
+via {cmd:bw(cv)} with customizable folds and grid density.
 
 {marker options}{...}
 {title:Options}
@@ -70,11 +73,22 @@ log-spaced with step 0.05.
 
 {phang}{opt generate(newvar)}: output variable name.
 
+{phang}{opt poly(#)}: polynomial degree for local polynomial regression.
+Default is 0 (Nadaraya-Watson, local constant).  {cmd:poly(1)} uses local
+linear regression, {cmd:poly(2)} uses local quadratic, etc.  For multivariate
+regressors, only {cmd:poly(0)} and {cmd:poly(1)} are supported.
+
+{phang}{opt derivatives(prefix)}: if specified with {cmd:poly(#>=1)},
+creates derivative output variables named {it:prefix}1, {it:prefix}2, etc.
+For 1D regressors, these are the 1st, 2nd, ... derivatives of the regression
+function.  For multivariate regressors with {cmd:poly(1)}, these are the
+partial derivatives with respect to each regressor.
+
 {phang}{opt se(newvar)}: if specified, computes a heteroskedasticity-robust
-local standard error for each prediction and stores it in {it:newvar}.  The
-standard error is based on local weighted squared residuals from the training
-set and is computed for both target=0 (training) and target=1 (test)
-observations.
+local standard error for each prediction and stores it in {it:newvar}.  Not
+available when {cmd:poly()} is specified.  The standard error is based on local
+weighted squared residuals from the training set and is computed for both
+target=0 (training) and target=1 (test) observations.
 
 {phang}{opt se_type(#)}: method for computing residuals used in the standard
 error formula.  {cmd:0} uses full-sample fitted values (fastest, slight finite-
@@ -133,6 +147,11 @@ a Stata 18 parsing bug.
 {phang2}{cmd:. nwreg y x, target(t) generate(yhat) se(yhat_se)}{p_end}
 {phang2}{cmd:. nwreg y x, generate(yhat) se(yhat_se) se_type(1)}{p_end}
 {phang2}{cmd:. nwreg y x, generate(yhat) se(yhat_se) se_type(0)}{p_end}
+
+{pstd}Local polynomial regression:{p_end}
+{phang2}{cmd:. nwreg y x, poly(1) generate(yhat_ll)}{p_end}
+{phang2}{cmd:. nwreg y x, poly(2) generate(yhat_lq) derivatives(dydx)}{p_end}
+{phang2}{cmd:. nwreg y x, poly(1) bw(cv) generate(yhat_cv)}{p_end}
 
 {pstd}Control CPU parallelism with {opt nproc}:{p_end}
 {phang2}{cmd:. nwreg y x, generate(yhat) nproc(4)}{p_end}

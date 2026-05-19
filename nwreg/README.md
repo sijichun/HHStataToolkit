@@ -41,6 +41,28 @@ where:
 
 The product kernel assumes local independence across dimensions, which simplifies computation while giving reasonable results for most applications.
 
+### Local Polynomial Regression
+
+When `poly(p)` is specified with $p \geq 1$, the plugin uses local polynomial regression instead of Nadaraya-Watson. At each evaluation point $a$, it solves a weighted least squares problem with basis functions:
+
+**1D (single regressor):**
+$$1, \quad (x - a), \quad (x - a)^2, \quad \ldots, \quad (x - a)^p$$
+
+**Multivariate (poly=1 only):**
+$$1, \quad (x_1 - a_1), \quad (x_2 - a_2), \quad \ldots, \quad (x_D - a_D)$$
+
+The prediction at point $a$ is the constant coefficient $\hat{\beta}_0$:
+$$\hat{m}(a) = \hat{\beta}_0$$
+
+The $k$-th derivative is computed as:
+$$\hat{m}^{(k)}(a) = k! \cdot \hat{\beta}_k$$
+
+**Key properties:**
+- Local linear regression (`poly(1)`) has better boundary behavior than NW regression
+- Higher-order polynomials (`poly(2)`, `poly(3)`) can capture more local curvature but require larger bandwidths
+- Multivariate regressors only support `poly(0)` (NW) and `poly(1)` (local linear); `poly > 1` with multiple regressors raises an error
+- Standard error estimation is not available with local polynomial regression (phase 1 limitation)
+
 ### Kernel Functions
 
 Five kernel functions are supported. All satisfy $\int K(u)\,du = 1$.
@@ -448,6 +470,184 @@ static void compute_bw_cv(double **train_x, double *train_y, int n_train,
 
 ---
 
+#### Local Polynomial Evaluation
+
+##### `lp_eval_1d`
+
+```c
+static double lp_eval_1d(double x, double *train_x, double *train_y,
+                         int n_train, double h, int kernel_type, int poly,
+                         double *derivatives)
+```
+
+**Purpose**: Evaluate local polynomial regression at a single 1D point.
+
+**Parameters**:
+- `x`: evaluation point
+- `train_x`, `train_y`: training data arrays
+- `n_train`: number of training observations
+- `h`: bandwidth
+- `kernel_type`: kernel selector
+- `poly`: polynomial degree ($\geq 1$)
+- `derivatives`: output array of length `poly` (or NULL); returns the $k$-th derivative
+
+**Algorithm**:
+1. Build WLS design matrix with basis $1, (x - a), (x - a)^2, \ldots, (x - a)^p$
+2. Call `wls_fit()` to solve the weighted least squares problem
+3. Prediction = `res->constant` (the $\hat{\beta}_0$ coefficient)
+4. If `derivatives != NULL`, fill with $\hat{m}^{(k)}(a) = k! \cdot \hat{\beta}_k$
+
+**Returns**: predicted value, or `SV_missval` if WLS fails to converge.
+
+---
+
+##### `lp_eval_mv`
+
+```c
+static double lp_eval_mv(double *x, double **train_x, double *train_y,
+                         int n_train, int dim, double *h, int kernel_type,
+                         double *derivatives)
+```
+
+**Purpose**: Evaluate local linear regression at a single multivariate point (poly=1 only).
+
+**Parameters**:
+- `x`: evaluation point vector of length `dim`
+- `train_x`: training regressor matrix `[dim][n_train]`
+- `train_y`: training response array
+- `n_train`: number of training observations
+- `dim`: number of regressors
+- `h`: bandwidth vector of length `dim`
+- `kernel_type`: kernel selector
+- `derivatives`: output array of length `dim` (or NULL); returns partial derivatives
+
+**Algorithm**:
+1. Build WLS design matrix with basis $1, (x_1 - a_1), \ldots, (x_d - a_d)$
+2. Call `wls_fit()` with product kernel weights
+3. Prediction = `res->constant`
+4. If `derivatives != NULL`, fill with partial derivatives $\partial \hat{m} / \partial x_d$
+
+**Returns**: predicted value, or `SV_missval` if WLS fails to converge.
+
+---
+
+##### `eval_lp_batch`
+
+```c
+static int eval_lp_batch(double **reg_data, int dim,
+                         double **train_x, double *train_y,
+                         int n_train, double *h, int kernel_type, int poly,
+                         int *obs_indices, int n_eval,
+                         double *result, double **deriv_results, int nderiv,
+                         int gpu_device)
+```
+
+**Purpose**: Batch evaluation dispatcher for local polynomial regression.
+
+**Parameters**:
+- `reg_data`: full dataset regressor matrix `[dim][n_obs]`
+- `dim`: number of regressors
+- `train_x`, `train_y`: training data
+- `n_train`: number of training observations
+- `h`: bandwidth vector
+- `kernel_type`, `poly`: regression parameters
+- `obs_indices`: array of `n_eval` observation indices to evaluate
+- `n_eval`: number of evaluation points
+- `result`: output prediction array (length `n_obs`)
+- `deriv_results`: array of `nderiv` derivative arrays (or NULL)
+- `nderiv`: number of derivative outputs to compute
+- `gpu_device`: CUDA device ID (if $\geq 0$, uses GPU; otherwise CPU)
+
+**Behavior**:
+- **CPU path** (`gpu_device < 0`): OpenMP-parallel loop, each thread calls `lp_eval_1d` or `lp_eval_mv`
+- **GPU path** (`gpu_device >= 0`): Dispatches to `gpu_lp_eval_1d` or `gpu_lp_eval_mv`
+
+**Returns**: 0 on success, non-zero on error.
+
+---
+
+#### Local Polynomial CV / Bandwidth Selection
+
+##### `cv_mse_lp_1d`
+
+```c
+static double cv_mse_lp_1d(double *data_x, double *data_y, int n, double h,
+                           int kernel_type, int k, int poly)
+```
+
+**Purpose**: Compute the $K$-fold cross-validated negative MSE for local polynomial regression in 1D.
+
+**Algorithm**: Same fold-splitting logic as `cv_mse_1d`, but evaluates predictions using `lp_eval_1d` instead of `nw_eval_1d_cpu`.
+
+**Returns**: Negative MSE (higher = better), or `-1e100` if no test observations were evaluated.
+
+---
+
+##### `cv_mse_lp_mv`
+
+```c
+static double cv_mse_lp_mv(double **data_x, double *data_y, int n, int dim,
+                           double *h, int kernel_type, int k)
+```
+
+**Purpose**: Multivariate version of `cv_mse_lp_1d` (local linear, poly=1).
+
+**Algorithm**: Uses `lp_eval_mv` for prediction within each fold.
+
+---
+
+##### `cv_select_lp_1d`
+
+```c
+static double cv_select_lp_1d(double *data_x, double *data_y, int n,
+                              int kernel_type, int k, int ngrids,
+                              double ref_h, int poly, int gpu_device)
+```
+
+**Purpose**: Grid-search CV bandwidth selector for 1D local polynomial regression.
+
+**Algorithm**:
+1. Generate $(2 \cdot \text{ngrids} + 1)$ log-spaced candidates around `ref_h`
+2. Evaluate `cv_mse_lp_1d` for each candidate
+3. Return the candidate with the highest score
+
+**Note**: `gpu_device` is accepted but ignored; local polynomial CV does not support GPU acceleration.
+
+---
+
+##### `cv_select_lp_mv`
+
+```c
+static void cv_select_lp_mv(double **data_x, double *data_y, int n, int dim,
+                            int kernel_type, int k, int ngrids,
+                            double *ref_h, double *h_out, int gpu_device)
+```
+
+**Purpose**: Grid-search CV bandwidth selector for multivariate local linear regression.
+
+**Algorithm**: Same proportional scaling logic as `cv_select_mv`, but evaluates with `cv_mse_lp_mv`.
+
+---
+
+##### `compute_bw_cv_lp`
+
+```c
+static void compute_bw_cv_lp(double **train_x, double *train_y, int n_train,
+                             int dim, int bandwidth_rule, double manual_h,
+                             int cv_folds, int cv_grids, int kernel_type,
+                             double *h, int poly, int gpu_device)
+```
+
+**Purpose**: Unified bandwidth selector for local polynomial regression.
+
+**Behavior**:
+- If `bandwidth_rule == BANDWIDTH_CV`: calls `cv_select_lp_1d` or `cv_select_lp_mv`
+- Otherwise: calls `compute_bw` (Silverman/Scott/manual)
+
+**Parameters**: Same as `compute_bw_cv` plus `poly` (polynomial degree) and `gpu_device` (ignored for CV).
+
+---
+
 #### Group Handling
 
 ##### `unique_groups_t`
@@ -627,6 +827,26 @@ Thread count is controlled via the `nproc()` option.
 
 **Conclusion**: nwreg produces bit-identical results regardless of thread count for both Silverman and CV bandwidth selection. OpenMP parallelism does not introduce any numerical non-determinism.
 
+### Local Polynomial Regression Tests
+
+Test suite: `test/nwreg/test_local_polynomial_reproducibility.do`
+Environment: 16-core CPU, Stata 18 MP, N=1,000.
+
+| Test | Description | Result |
+|------|-------------|--------|
+| **Backward compatibility** | `poly(0)` matches NW exactly | PASS (bit-identical) |
+| **Reproducibility** | Same seed gives same results | PASS (bit-identical) |
+| **1-core vs 16-core** | `poly(1)` single vs multi-core | PASS (bit-identical) |
+| **Multivariate poly(1)** | 2 regressors with `poly(1)` | PASS (N=1000) |
+| **Error handling** | `poly(2)` with 2 regressors rejected | PASS (rc=1) |
+| **Derivatives** | `poly(2)` with `derivatives()` | PASS (d1 range: -9.66 to 36.59) |
+| **CV bandwidth** | `poly(1)` with `bw(cv)` | PASS (N=1000) |
+| **Target split** | `poly(1)` with `target()` | PASS |
+| **Grouped estimation** | `poly(1)` with `group()` | PASS (N=1000) |
+| **SE rejection** | `se()` with `poly(1)` rejected | PASS (rc=198) |
+
+**Conclusion**: All 10 local polynomial tests pass. The implementation is backward compatible (poly=0 = NW), reproducible, bit-identical across thread counts, and correctly handles error cases.
+
 ### Performance
 
 Measured on 16-core CPU, Stata 18 MP. Timed via `clock(c(current_time), "hms")`
@@ -679,6 +899,27 @@ Key observations:
   due to product kernel evaluation over 3 dimensions.
 - The `nproc()` option directly controls OpenMP thread count in the C plugin.
 
+#### Local Polynomial Regression (1D, Silverman Bandwidth)
+
+Single iteration per N. DGP: $y = \sin(x) + 0.3 \cdot \varepsilon$.
+
+| N | poly=0 1t | poly=0 16t | poly=1 1t | poly=1 16t | poly=2 1t | poly=2 16t |
+|---|:---------:|:----------:|:---------:|:----------:|:---------:|:----------:|
+| 1,000 | <1¹ | <1¹ | <1¹ | <1¹ | <1¹ | <1¹ |
+| 5,000 | <1¹ | <1¹ | 1 | <1¹ | <1¹ | <1¹ |
+| 10,000 | <1¹ | <1¹ | 1 | <1¹ | 1 | <1¹ |
+| 50,000 | 10 | 1 | 30 | 3 | 40 | 6 |
+| 100,000 | 43 | 5 | 228 | 32 | 275 | 46 |
+
+¹ Total wall time < 1 clock tick (1000 ms).
+
+**Key observations:**
+- Local polynomial regression is **slower** than NW because each evaluation point solves a separate weighted least squares problem via DGELSD (SVD-based).
+- At N=100K, poly=1 is **~5.3×** slower than NW (228ms vs 43ms single-core), and poly=2 is **~6.4×** slower (275ms vs 43ms).
+- Multi-core speedup for LP is **~7.1×** for poly=1 (228ms → 32ms) and **~6.0×** for poly=2 (275ms → 46ms) at N=100K.
+- The cost increase from poly=1 to poly=2 is modest (~20% at N=100K), because the dominant cost is the O(N) kernel weight computation per evaluation point, not the O(poly³) WLS solve.
+- For small N (<10K), LP overhead is negligible; the plugin finishes within a single clock tick.
+
 ### GPU (Hidden Feature)
 
 CUDA-accelerated GPU plugins (`nwreg_cuda.plugin`) are available as a hidden
@@ -693,6 +934,41 @@ The GPU plugin is loaded by passing `gpu(-1)` to the C plugin internally
 (the ado wrapper now hardcodes this). Results are comparable to CPU within
 float-precision tolerance (~1e-5).
 
+#### GPU Acceleration for Local Polynomial Regression
+
+When `poly() >= 1` is used with the CUDA plugin, the GPU accelerates the
+per-evaluation-point WLS solves. Each CUDA thread handles one evaluation point,
+building and solving a small $(p+1) \times (p+1)$ linear system via Gaussian
+elimination with partial pivoting in single precision.
+
+**Accuracy**: N=100,000 comparison (float GPU vs double CPU):
+
+| Poly | Max Absolute Diff | Mean Absolute Diff |
+|------|:-----------------:|:------------------:|
+| 1    | 5.5e-02           | 1.4e-03            |
+| 2    | 9.9e-01           | 1.3e-03            |
+
+The larger max diffs occur at points where the local WLS system is nearly
+singular (few nearby training observations within kernel support); the
+mean diffs remain small (~1e-3), consistent with float-vs-double expectations.
+
+**Performance**: N=100,000, 1D, Silverman bandwidth.
+
+| Mode | poly=1 | poly=2 |
+|------|:------:|:------:|
+| CPU 16-core | 31 ms | 46 ms |
+| GPU | <1 ms | 1 ms |
+
+GPU provides substantial speedup for local polynomial regression because the
+per-point WLS solves are embarrassingly parallel. Each thread independently
+computes kernel weights, builds the normal equations, and solves the small
+system without inter-thread communication.
+
+**Build**:
+```bash
+make nwreg_cuda   # Builds both NW and LP CUDA support in one plugin
+```
+
 ### Running Tests
 
 ```bash
@@ -705,8 +981,15 @@ stata -b do test/nwreg/test_seed_reproducibility.do
 # Simulation / functional tests
 stata -b do test/nwreg/test_nwreg_simulation.do
 
+# Local polynomial regression tests
+stata -b do test/nwreg/test_local_polynomial.do
+stata -b do test/nwreg/test_local_polynomial_reproducibility.do
+
 # GPU reproducibility (requires CUDA plugin)
 stata -b do test/nwreg/test_gpu_reproducibility.do
+
+# CPU vs GPU comparison for local polynomial (requires CUDA plugin)
+bash test/nwreg/test_local_polynomial_gpu.sh
 ```
 
 ## Notes

@@ -16,6 +16,8 @@ program define nwreg, rclass
            TARget(varname numeric) ///
            GRoup(varlist) ///
            GENerate(string) ///
+           POLY(integer 0) ///
+           DERivatives(string) ///
            SEType(integer 2) ///
            SE(string) ///
            MINcount(integer 0) ///
@@ -135,10 +137,42 @@ program define nwreg, rclass
             quietly generate double `se' = .
         }
     }
+
+    /* Create derivative output variables (if requested) */
+    local nderiv = 0
+    local deriv_vars ""
+    if "`derivatives'" != "" {
+        if `poly' == 0 {
+            display as error "derivatives() requires poly >= 1"
+            exit 198
+        }
+        local max_deriv = `poly'
+        if `nreg' > 1 {
+            local max_deriv = `nreg'
+        }
+        forvalues d = 1/`max_deriv' {
+            local deriv_name = "`derivatives'`d'"
+            capture confirm new variable `deriv_name'
+            if _rc {
+                quietly replace `deriv_name' = .
+            }
+            else {
+                quietly generate double `deriv_name' = .
+            }
+            local deriv_vars "`deriv_vars' `deriv_name'"
+        }
+        local nderiv = `max_deriv'
+    }
     
     /* Validate se_type */
     if `setype' < 0 | `setype' > 2 {
         display as error "se_type must be 0, 1, or 2"
+        exit 198
+    }
+
+    /* Local polynomial does not support SE in phase 1 */
+    if `poly' > 0 & "`se'" != "" {
+        display as error "se() is not supported with poly > 0"
         exit 198
     }
     
@@ -148,6 +182,7 @@ program define nwreg, rclass
     if `ngroup' > 0 local plugin_vars "`plugin_vars' `groupvars'"
     local plugin_vars "`plugin_vars' `gen_var'"
     if `nse' local plugin_vars "`plugin_vars' `se'"
+    if `nderiv' > 0 local plugin_vars "`plugin_vars' `deriv_vars'"
     local plugin_vars "`plugin_vars' `touse'"
     
     * Load CPU plugin
@@ -160,7 +195,7 @@ program define nwreg, rclass
     local plugin_path = subinstr("`plugin_path'", "~", "`homedir'", .)
     capture program _nwreg_plugin, plugin using("`plugin_path'")
     
-    /* Build options for plugin — use user-specified nproc or default 4 */
+    /* Build options for plugin */
     local nproc = `nproc'
     local plugin_args "kernel(`kernel_opt')"
     local plugin_args "`plugin_args' bw(`bw_opt')"
@@ -174,6 +209,8 @@ program define nwreg, rclass
     local plugin_args "`plugin_args' ngrids(`grids')"
     local plugin_args "`plugin_args' gpu(-1)"
     local plugin_args "`plugin_args' nproc(`nproc')"
+    local plugin_args "`plugin_args' poly(`poly')"
+    local plugin_args "`plugin_args' nderiv(`nderiv')"
     
     /* If CV bandwidth: shuffle data order for randomized folds */
     local is_cv = ("`bw_opt'" == "cv")
@@ -218,15 +255,38 @@ program define nwreg, rclass
     display as text "Observations: " as result r(N)
     display as text "Kernel:       " as result "`kernel_opt'"
     display as text "Bandwidth:    " as result "`bw_opt'"
+    if `poly' > 0 {
+        display as text "Polynomial:   " as result "`poly'"
+    }
     if `nse' {
         display as text "SE variable:  " as result "`se'"
+    }
+    if `nderiv' > 0 {
+        display as text "Derivatives:  " as result "`derivatives'*"
     }
     display as text "{hline 40}"
     
     /* Label variables */
-    label variable `gen_var' "Nadaraya-Watson regression estimate"
+    if `poly' > 0 {
+        label variable `gen_var' "Local polynomial regression estimate"
+    }
+    else {
+        label variable `gen_var' "Nadaraya-Watson regression estimate"
+    }
     if `nse' {
         label variable `se' "NW regression standard error"
+    }
+    if `nderiv' > 0 {
+        local max_deriv = `nderiv'
+        forvalues d = 1/`max_deriv' {
+            local deriv_name = "`derivatives'`d'"
+            if `nreg' == 1 {
+                label variable `deriv_name' "`d'-th derivative of LP regression"
+            }
+            else {
+                label variable `deriv_name' "Partial derivative w.r.t. regressor `d'"
+            }
+        }
     }
     
 end

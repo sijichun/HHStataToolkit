@@ -121,7 +121,7 @@ ifeq ($(NVCC),)
 	@exit 1
 else
 	@echo "Building nwreg_cuda..."
-	$(NVCC) $(CUDA_FLAGS) $(COMMON_SRC) nwreg/nwreg.c nwreg/nwreg_cuda.cu -o nwreg/nwreg_cuda.plugin -lm -lcudart_static -lpthread -ldl
+	$(NVCC) $(CUDA_FLAGS) $(COMMON_SRC) nwreg/nwreg.c nwreg/nwreg_cuda.cu nwreg/local_polynomial_cuda.cu -o nwreg/nwreg_cuda.plugin -lm -lcudart_static -lpthread -ldl $(BLAS_LIBS)
 	@echo "nwreg_cuda build complete (cudart statically linked)."
 endif
 
