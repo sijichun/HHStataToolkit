@@ -3,8 +3,9 @@
 **Updated:** 2026-05-15 · **Branch:** main
 
 Stata plugin collection: kernel density (`kdensity2`), kernel regression (`nwreg`),
-random forest (`fangorn`), partially linear model via DML (`xpofangorn`).
-C plugins + ado wrappers + pure-Stata utilities (`dta2md`, `bprecall`, etc.).
+random forest (`fangorn`), partially linear model via DML (`xpofangorn`),
+generalized random forest (`grf`).
+C/C++ plugins + ado wrappers + pure-Stata utilities (`dta2md`, `bprecall`, etc.).
 
 ## Quick Start
 
@@ -12,6 +13,7 @@ C plugins + ado wrappers + pure-Stata utilities (`dta2md`, `bprecall`, etc.).
 make               # Build CPU plugins only (kdensity2, nwreg, fangorn)
 make kdensity2     # Single CPU plugin
 make kdensity2_cuda # Hidden feature: CUDA plugin (requires nvcc + GPU)
+make grf           # Build GRF causal forest plugin (C++17 required)
 make install       # .plugin → ~/ado/plus/, .ado/.sthlp → ~/ado/plus/<letter>/
 make clean         # Remove all .plugin files
 make dist          # Package to ado/plus/ for distribution

@@ -11,6 +11,9 @@ decision trees, written in C. Includes standalone utility commands.
 | **nwreg** | Nadaraya-Watson / local polynomial kernel regression | 1D/MV, target split (train/predict), multi-group, CV bandwidth, robust SE, local polynomial (`poly()`), derivatives (`derivatives()`). GPU acceleration via `make nwreg_cuda` (hidden feature). |
 | **fangorn** | CART decision tree / random forest | Gini/Entropy/MSE, pre-sorted splits, CV depth selection, OOB error, MDI importance, mtry, ntiles quantile strategy, Mermaid export |
 | **xpofangorn** | Partially linear model via DML | Double machine learning, K-fold cross-fitting, auto-detect binary/continuous treatment, robust and cluster SE, all fangorn options pass-through |
+| **grf** | Generalized random forest for CATE | Heterogeneous treatment effects (causal forest), honest splitting, OOB predictions, variance estimates, cluster/weights support. Adapted from [grf-labs/grf](https://github.com/grf-labs/grf) v2.6.1 (GPL-3.0). |
+
+> **Note**: grf is currently in development (MVP phase). It implements causal forest for heterogeneous treatment effect estimation (Athey, Tibshirani & Wager, 2019), leveraging the upstream [GRF C++ core library](https://github.com/grf-labs/grf). The command syntax is `grf y w x1 x2 ...`.
 
 > **Note**: 对于因果推断，更好的方法是使用 **causal forest** 和 **generalized random forest**（Athey & Imbens, 2016; Athey, Tibshirani & Wager, 2019），仍待开发。当前 `xpofangorn` 通过双重机器学习（DML）提供了部分线性模型的估计，而 `fangorn` 的 `target()` 选项提供了一种简化的反事实预测方式，但两者尚不具备异质性处理效应（CATE）的无偏估计、honest 分裂等 causal forest 的核心特性。
 
@@ -105,6 +108,10 @@ stata -b do test/fangorn/test_fangorn_regularization.do
 stata -b do test/fangorn/test_fangorn_basic.do
 stata -b do test/fangorn/test_fangorn_cv.do
 stata -b do test/csa/test_csadensity.do
+
+# GRF tests
+stata -b do test/grf/test_grf_basic.do
+stata -b do test/grf/test_grf_seed_reproducibility.do
 ```
 
 ## Development
@@ -121,5 +128,9 @@ This project was developed with AI-assisted tooling:
 
 ## License
 
-MIT. `stplugin.h` and `stplugin.c` are official StataCorp files distributed
-under their own terms.
+HHStataToolkit's own code and documentation are licensed under GPL-3.0-or-later.
+`stplugin.h` and `stplugin.c` are official StataCorp files distributed under
+their own terms. The `grf/` plugin incorporates code from
+[grf-labs/grf](https://github.com/grf-labs/grf) v2.6.1 (GPL-3.0).
+GRF and other bundled third-party material retain their original notices and
+licenses; see [LICENSES.md](LICENSES.md).

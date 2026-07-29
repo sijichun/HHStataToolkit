@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/grf_tests.dir/setup.cpp.o CMakeFiles/grf_tests.dir/ForestSmokeTest.cpp.o CMakeFiles/grf_tests.dir/CausalForestTest.cpp.o CMakeFiles/grf_tests.dir/RegressionPredictionStrategyTest.cpp.o CMakeFiles/grf_tests.dir/utilities/FileTestUtilities.cpp.o CMakeFiles/grf_tests.dir/utilities/ForestTestUtilities.cpp.o -o grf_tests  libgrf-core.a

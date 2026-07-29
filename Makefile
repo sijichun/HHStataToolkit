@@ -33,6 +33,11 @@ CFLAGS = -O3 -Wall -Isrc -fopenmp
 LDFLAGS = -lm -fopenmp
 BLAS_LIBS = -lopenblas
 
+# C++ compiler settings (for multi-file C++ plugins)
+CXX      ?= g++
+CXXFLAGS  = -std=c++17 -O3 -Wall -Isrc -fopenmp
+LDFLAGS_CXX = -lm -fopenmp -lopenblas
+
 # CUDA settings (optional)
 NVCC := $(shell which nvcc 2>/dev/null)
 CUDA_ARCH ?= sm_60
@@ -66,7 +71,7 @@ else ifeq ($(UNAME_S),Darwin)
 endif
 
 # Build targets
-.PHONY: all clean install dist help check-openblas $(PLUGINS) fangorn kdensity2_cuda nwreg_cuda
+.PHONY: all clean install dist help check-openblas $(PLUGINS) fangorn kdensity2_cuda nwreg_cuda grf-minimal grf
 
 CUDA_TARGETS :=
 ifneq ($(NVCC),)
@@ -102,6 +107,26 @@ fangorn: check-openblas $(PLUGINS)
 	@echo "Building fangorn..."
 	$(CC) $(CFLAGS) $(COMMON_SRC) fangorn/fangorn.c fangorn/ent.c fangorn/split.c fangorn/utils_rf.c -o fangorn/fangorn.plugin $(LDFLAGS) $(BLAS_LIBS)
 	@echo "fangorn build complete."
+
+# GRF multi-file C++ plugin (stub — sources not yet written)
+grf-minimal:
+	@echo "Building grf-minimal..."
+	$(CXX) $(CXXFLAGS) -shared -fPIC -DSYSTEM=OPUNIX \
+	    src/stplugin.c grf/grf_stata_minimal.cpp \
+	    -o grf/grf_minimal.plugin $(LDFLAGS_CXX)
+	@echo "grf-minimal built: grf/grf_minimal.plugin"
+
+GRF_CORE_SRC := $(shell find grf/vendor/grf-core/src -name '*.cpp' | sort)
+GRF_STATA_SRC = grf/grf_stata.cpp grf/grf_stata_data.cpp grf/grf_stata_options.cpp grf/grf_stata_output.cpp
+GRF_ALL_SRC = src/stplugin.c $(GRF_CORE_SRC) $(GRF_STATA_SRC)
+
+grf: check-openblas
+	@echo "Building grf..."
+	$(CXX) -std=c++17 -shared -fPIC -DSYSTEM=OPUNIX -fopenmp \
+	    -O3 -Wall -Isrc -Igrf/vendor/grf-core/src -Igrf/vendor/eigen -Igrf/vendor/grf-core/third_party \
+	    $(GRF_ALL_SRC) -o grf/grf.plugin \
+	    -pthread -fopenmp -lopenblas
+	@echo "grf built: grf/grf.plugin"
 
 # CUDA-accelerated kdensity2 plugin (requires nvcc)
 kdensity2_cuda:

@@ -5,6 +5,7 @@ ado/
 *.zip
 test/*.md
 .sisyphus/
+.omo/
 .ruff_cache/
 __pycache__/
 *.pyc
