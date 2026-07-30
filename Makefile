@@ -54,6 +54,7 @@ WINDOWS_OPENBLAS_STATIC_LIBS ?= -Wl,-Bstatic -lopenblas -lgfortran -lquadmath -l
 # Platform-specific flags (mutually exclusive)
 ifeq ($(OS),Windows_NT)
     CC = x86_64-w64-mingw32-gcc
+    CXX = x86_64-w64-mingw32-g++
     # Note: -DSYSTEM=STWIN32 not needed; stplugin.h defaults to STWIN32
     CFLAGS += -shared -fPIC -O3 -Wall -Isrc -I$(OPENBLAS_INC)
     # Static-link OpenBLAS and MinGW runtime deps so the plugin works
@@ -94,7 +95,7 @@ ifneq ($(OS),Windows_NT)
 endif
 endif
 
-all: $(PLUGINS) fangorn
+all: $(PLUGINS) fangorn grf
 
 # Generic plugin build rule (for single-file plugins)
 $(PLUGINS): check-openblas
@@ -120,12 +121,23 @@ GRF_CORE_SRC := $(shell find grf/vendor/grf-core/src -name '*.cpp' | sort)
 GRF_STATA_SRC = grf/grf_stata.cpp grf/grf_stata_data.cpp grf/grf_stata_options.cpp grf/grf_stata_output.cpp
 GRF_ALL_SRC = src/stplugin.c $(GRF_CORE_SRC) $(GRF_STATA_SRC)
 
+# GRF platform-specific flags: on Windows (MinGW cross-compile) stplugin.h
+# must default to STWIN32 — defining SYSTEM=OPUNIX pulls in <dlfcn.h>, which
+# does not exist on Windows.
+ifeq ($(OS),Windows_NT)
+    GRF_SYSFLAGS =
+    GRF_LDLIBS = -static-libgcc -static -static-libstdc++ -L$(OPENBLAS_LIB) $(WINDOWS_OPENBLAS_STATIC_LIBS)
+else
+    GRF_SYSFLAGS = -DSYSTEM=OPUNIX
+    GRF_LDLIBS = -pthread -lopenblas
+endif
+
 grf: check-openblas
 	@echo "Building grf..."
-	$(CXX) -std=c++17 -shared -fPIC -DSYSTEM=OPUNIX -fopenmp \
+	$(CXX) -std=c++17 -shared -fPIC $(GRF_SYSFLAGS) -fopenmp \
 	    -O3 -Wall -Isrc -Igrf/vendor/grf-core/src -Igrf/vendor/eigen -Igrf/vendor/grf-core/third_party \
 	    $(GRF_ALL_SRC) -o grf/grf.plugin \
-	    -pthread -fopenmp -lopenblas
+	    -fopenmp $(GRF_LDLIBS)
 	@echo "grf built: grf/grf.plugin"
 
 # CUDA-accelerated kdensity2 plugin (requires nvcc)
@@ -158,6 +170,8 @@ clean:
 	done
 	@echo "Cleaning fangorn..."
 	@rm -f fangorn/fangorn.plugin
+	@echo "Cleaning grf..."
+	@rm -f grf/grf.plugin grf/grf_minimal.plugin
 	@echo "Cleaning kdensity2_cuda..."
 	@rm -f kdensity2/kdensity2_cuda.plugin
 	@echo "Cleaning nwreg_cuda..."
@@ -180,6 +194,11 @@ install: all
 	@mkdir -p ~/ado/plus/f && cp fangorn/fangorn.ado ~/ado/plus/f/ 2>/dev/null || true
 	@cp fangorn/fangorn.sthlp ~/ado/plus/f/ 2>/dev/null || true
 	@echo "  Installed fangorn"
+	@echo "Installing grf..."
+	@cp grf/grf.plugin ~/ado/plus/ 2>/dev/null || true
+	@mkdir -p ~/ado/plus/g && cp grf/grf.ado ~/ado/plus/g/ 2>/dev/null || true
+	@cp grf/grf.sthlp ~/ado/plus/g/ 2>/dev/null || true
+	@echo "  Installed grf"
 ifneq ($(wildcard kdensity2/kdensity2_cuda.plugin),)
 	@echo "Installing kdensity2_cuda..."
 	@cp kdensity2/kdensity2_cuda.plugin ~/ado/plus/ 2>/dev/null || true
@@ -225,6 +244,11 @@ dist: all
 	@mkdir -p ado/plus/f && cp fangorn/fangorn.ado ado/plus/f/ 2>/dev/null || true
 	@cp fangorn/fangorn.sthlp ado/plus/f/ 2>/dev/null || true
 	@echo "  Packaged fangorn"
+	@echo "Packaging grf..."
+	@cp grf/grf.plugin ado/plus/ 2>/dev/null || true
+	@mkdir -p ado/plus/g && cp grf/grf.ado ado/plus/g/ 2>/dev/null || true
+	@cp grf/grf.sthlp ado/plus/g/ 2>/dev/null || true
+	@echo "  Packaged grf"
 ifneq ($(wildcard kdensity2/kdensity2_cuda.plugin),)
 	@echo "Packaging kdensity2_cuda..."
 	@cp kdensity2/kdensity2_cuda.plugin ado/plus/ 2>/dev/null || true
@@ -259,6 +283,9 @@ help:
 	@echo "Targets:"
 	@echo "  all          - Build all plugins (default, CPU only)"
 	@echo "  kdensity2    - Build kdensity2 plugin only"
+	@echo "  nwreg        - Build nwreg plugin only"
+	@echo "  fangorn      - Build fangorn plugin only"
+	@echo "  grf          - Build grf (generalized random forest) plugin only"
 	@echo "  kdensity2_cuda - Build kdensity2 with CUDA (hidden feature, requires nvcc)"
 	@echo "  nwreg_cuda   - Build nwreg with CUDA (hidden feature, requires nvcc)"
 	@echo "  clean        - Remove all built files"

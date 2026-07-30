@@ -10,7 +10,7 @@ C/C++ plugins + ado wrappers + pure-Stata utilities (`dta2md`, `bprecall`, etc.)
 ## Quick Start
 
 ```bash
-make               # Build CPU plugins only (kdensity2, nwreg, fangorn)
+make               # Build CPU plugins only (kdensity2, nwreg, fangorn, grf)
 make kdensity2     # Single CPU plugin
 make kdensity2_cuda # Hidden feature: CUDA plugin (requires nvcc + GPU)
 make grf           # Build GRF causal forest plugin (C++17 required)

@@ -83,8 +83,9 @@ make
 make kdensity2
 make nwreg
 make fangorn
+make grf
 
-# Install to ~/ado/plus/ (both plugins + single_ado)
+# Install to ~/ado/plus/ (all plugins + single_ado, including grf)
 make install
 
 # Package for distribution
