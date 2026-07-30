@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 2.4.0  10may2026}{...}
+{* *! version 2.5.0  30jul2026}{...}
 {cmd:help kdensity2}{right: ({stata "viewsource kdensity2/kdensity2.ado":view source})}
 {hline}
 
@@ -23,6 +23,7 @@
 {synopt :{opt bw(bandwidth)}}bandwidth selection; default is {cmd:silverman}{p_end}
 {synopt :{opt target(varname)}}0/1 variable: 0=training, 1=test{p_end}
 {synopt :{opt group(varlist)}}one or more grouping variables{p_end}
+{synopt :{opt gnorm:alize}}weight group densities by sample shares (mixture scale){p_end}
 {synopt :{opt mincount(#)}}skip groups with fewer than # observations{p_end}
 {synopt :{opt nproc(#)}}OpenMP threads for CPU parallelism; default is 16{p_end}
 {synopt :{opt folds(#)}}CV folds (used with {cmd:bw(cv)}); default is 10{p_end}
@@ -53,7 +54,24 @@ K-fold likelihood cross-validation with a log-scale grid search.
 
 {phang}{opt target(varname)}: 0/1 variable; target=0 is training set.
 
-{phang}{opt group(varlist)}: grouping variables for separate estimation.  Maximum {cmd:50000} unique combinations across all group variables.
+{phang}{opt group(varlist)}: grouping variables for separate estimation.  Maximum {cmd:50000} unique combinations across all group variables.  Observations with a missing value in any group variable are excluded from estimation and receive missing results.
+
+{phang}{opt gnormalize}: scale of grouped density output.  By default,
+grouped estimation yields a {it:conditional} density f(x|g) for each
+group, which integrates to 1 within the group; this is the right scale
+for comparing distribution shapes across groups (the same convention as
+official {helpb kdensity}).  With {opt gnormalize}, each group's
+conditional density is multiplied by its sample share
+p(g) = n_g/N, producing {it:mixture components}: the group densities
+then sum to the overall density, f(x) = sum_g p(g)*f(x|g).  Use this
+for decomposition or counterfactual analysis where the group curves
+must aggregate to the population density (e.g., DFL-style
+decompositions, stacked-area plots).  Two caveats: (1) because each
+group selects its own bandwidth, the weighted sum approximates but is
+not numerically identical to the density estimated on the pooled
+sample (equality holds only when all groups share a common bandwidth);
+(2) the weighting is applied after estimation and does not affect
+bandwidth selection.  Requires {opt group()}.
 
 {phang}{opt mincount(#)}: skip groups with fewer than # observations.
 
@@ -114,6 +132,7 @@ N=100,000 with Silverman bandwidth, a 16-core system achieves approximately
 {phang2}{cmd:. kdensity2 x, bw(cv) folds(5) grids(15)}{p_end}
 {phang2}{cmd:. kdensity2 x, generate(d) if(flag==1)}{p_end}
 {phang2}{cmd:. kdensity2 x, group(g) mincount(50)}{p_end}
+{phang2}{cmd:. kdensity2 x, group(g) gnormalize}{p_end}
 {phang2}{cmd:. kdensity2 x y, group(g1 g2) target(t)}{p_end}
 
 {pstd}Control CPU parallelism with {opt nproc}:{p_end}

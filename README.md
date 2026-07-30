@@ -11,11 +11,9 @@ decision trees, written in C. Includes standalone utility commands.
 | **nwreg** | Nadaraya-Watson / local polynomial kernel regression | 1D/MV, target split (train/predict), multi-group, CV bandwidth, robust SE, local polynomial (`poly()`), derivatives (`derivatives()`). GPU acceleration via `make nwreg_cuda` (hidden feature). |
 | **fangorn** | CART decision tree / random forest | Gini/Entropy/MSE, pre-sorted splits, CV depth selection, OOB error, MDI importance, mtry, ntiles quantile strategy, Mermaid export |
 | **xpofangorn** | Partially linear model via DML | Double machine learning, K-fold cross-fitting, auto-detect binary/continuous treatment, robust and cluster SE, all fangorn options pass-through |
-| **grf** | Generalized random forest for CATE | Heterogeneous treatment effects (causal forest), honest splitting, OOB predictions, variance estimates, cluster/weights support. Adapted from [grf-labs/grf](https://github.com/grf-labs/grf) v2.6.1 (GPL-3.0). |
+| **grf** | Causal forest for heterogeneous treatment effects (CATE) | Honest splitting, R-learner orthogonalization (internal nuisance forests), OOB predictions, variance estimation via "bootstrap of little bags", cluster/weights support. C++17 required. Adapted from [grf-labs/grf](https://github.com/grf-labs/grf) v2.6.1 (GPL-3.0). R-vs-Stata parity: 0.997 correlation. |
 
-> **Note**: grf is currently in development (MVP phase). It implements causal forest for heterogeneous treatment effect estimation (Athey, Tibshirani & Wager, 2019), leveraging the upstream [GRF C++ core library](https://github.com/grf-labs/grf). The command syntax is `grf y w x1 x2 ...`.
 
-> **Note**: 对于因果推断，更好的方法是使用 **causal forest** 和 **generalized random forest**（Athey & Imbens, 2016; Athey, Tibshirani & Wager, 2019），仍待开发。当前 `xpofangorn` 通过双重机器学习（DML）提供了部分线性模型的估计，而 `fangorn` 的 `target()` 选项提供了一种简化的反事实预测方式，但两者尚不具备异质性处理效应（CATE）的无偏估计、honest 分裂等 causal forest 的核心特性。
 
 ## Standalone Utilities
 
@@ -42,7 +40,25 @@ This is particularly useful for **treatment/control analysis**: train on the con
 
 ### Group Variable Handling
 
-An advantage over official Stata commands: `kdensity2` and `nwreg` handle **multi-dimensional grouping** natively (2+ group variables). Official `kdensity` only supports a single `by()` group variable and cannot use string group variables directly. In this toolkit, string group variables are auto-encoded to numeric via `egen group()` in the ado layer.
+An advantage over official Stata commands: `kdensity2` and `nwreg` handle **multi-dimensional grouping** natively (2+ group variables). Official `kdensity` only supports a single `by()` group variable and cannot use string group variables directly. In this toolkit, string group variables are auto-encoded to numeric via `egen group()` in the ado layer, and observations with missing group values are excluded from estimation.
+
+By default, grouped estimation in `kdensity2` yields **conditional densities** f(x|g) — each group's estimate integrates to 1 within the group (the same convention as official `kdensity`). With the `gnormalize` option, each group's density is scaled by its sample share p(g) = n_g/N, so the group curves aggregate to the overall **mixture density** f(x) = Σ_g p(g)·f(x|g). Use the default for comparing distribution shapes across groups; use `gnormalize` for decomposition/counterfactual analysis (e.g., DFL-style decompositions, stacked-area plots). Note: because each group selects its own bandwidth, the weighted sum approximates — but is not identical to — the density estimated on the pooled sample.
+
+### Causal Forest — Heterogeneous Treatment Effects (`grf`)
+
+`grf` implements the causal forest algorithm (Athey, Tibshirani & Wager, 2019) for estimating **conditional average treatment effects** (CATE | X). It wraps the upstream [GRF C++ core library](https://github.com/grf-labs/grf) v2.6.1 via a thin C++ adapter.
+
+**Syntax**: `grf y w x1 x2 ... , generate(newvar) [options]`
+
+Key characteristics:
+
+- **Honest splitting** (default): the training subsample is split into two independent parts — one for choosing splits, one for estimating leaf-level treatment effects. Reduces overfitting; required for valid confidence intervals.
+- **R-learner orthogonalization**: nuisance functions E[Y|X] and E[W|X] are estimated via internal regression forests (or user-provided via `yhat()`/`what()`). Outcomes and treatments are centered before forest training, isolating the treatment effect from confounding (Nie & Wager, 2021).
+- **Out-of-bag (OOB) predictions**: each tree is trained on a bootstrap subsample; observations left out receive predictions only from trees that did not use them, providing unbiased CATE estimates. Saved via `oobgenerate()`.
+- **Variance estimation**: the "bootstrap of little bags" delta method accounting for both tree- and forest-level uncertainty. Activated via `vargenerate()`; requires `cigroupsize(>=2)`.
+- **Cluster and weight support**: cluster-robust variance (`cluster(varname)`), sample weights (`weights(varname)`), optional `equalizeclusterweights`.
+- **R-vs-Stata parity**: CATE estimates correlate at **0.997** with the official [grf R package](https://github.com/grf-labs/grf) under identical data, seed, nuisance, and mtry settings.
+- **Build requirement**: C++17 (pre-built plugin included in releases; downstream users do not need to build).
 
 ## Project Structure
 
@@ -55,22 +71,26 @@ HHStataToolkit/
 ├── kdensity2/               # Kernel density plugin (single-file C)
 ├── nwreg/                   # Nadaraya-Watson regression plugin (single-file C)
 ├── fangorn/                 # Decision tree / random forest (multi-file C)
+├── grf/                     # Causal forest (C++17, wraps grf-labs/grf v2.6.1)
+│   ├── grf_stata.cpp        # Stata plugin entry + data bridge
+│   ├── vendor/              # Upstream GRF C++ core + Eigen
+│   └── grf.ado / .sthlp     # Stata command and help
 ├── xpofangorn/              # DML partially linear model (pure Stata, calls fangorn)
 ├── single_ado/              # Pure Stata commands (no compilation needed)
-├── test/                    # Test do-files, organised per plugin
+├── tests/                   # Test do-files, organised per plugin
 │   ├── kdensity2/
+│   │   ├── test_gnormalize.do  # gnormalize option
 │   ├── nwreg/
 │   ├── fangorn/
 │   │   ├── benchmark/       # Unified DT + RF benchmark vs scikit-learn
-│   │   ├── test_fangorn_basic.do      # Quick integration smoke test
-│   ├── xpofangorn/               # DML partially linear model tests
-│   │   ├── test_fangorn_cv.do         # CV depth selection test
-│   │   ├── test_fangorn_phase1.do     # Phase 1 decision tree tests
-│   │   ├── test_fangorn_phase2.do     # Phase 2 random forest tests
-│   │   ├── test_fangorn_regularization.do # Regularization tests
-│   │   └── test_mermaid_output.do     # Mermaid export tests
+│   │   └── ...
+│   ├── grf/                 # Causal forest tests (9 suites)
+│   ├── xpofangorn/
 │   └── csa/                 # csadensity tests
-└── AGENTS.md                # Agent instruction file (replaces CLI help for AI)
+├── AGENTS.md                # Agent instruction file (replaces CLI help for AI)
+├── README.md
+├── README4AI.md             # LLM-oriented command reference
+└── LICENSE.md / LICENSES.md / TODO.md / Releases/
 ```
 
 ## Quick Start
@@ -91,28 +111,9 @@ make install
 # Package for distribution
 make dist
 
-# Reproducibility tests (bit-identical 10-run)
-stata -b do test/kdensity2/test_seed_reproducibility.do
-stata -b do test/kdensity2/test_cpu_reproducibility.do
-stata -b do test/nwreg/test_seed_reproducibility.do
-stata -b do test/nwreg/test_cpu_reproducibility.do
-stata -b do test/fangorn/test_fangorn_seed_reproducibility.do
-
-# Functional tests
-stata -b do test/kdensity2/test_chi2_group.do
-stata -b do test/nwreg/test_nwreg_simulation.do
-stata -b do test/nwreg/test_local_polynomial.do
-stata -b do test/nwreg/test_local_polynomial_reproducibility.do
-stata -b do test/fangorn/test_fangorn_phase1.do
-stata -b do test/fangorn/test_fangorn_phase2.do
-stata -b do test/fangorn/test_fangorn_regularization.do
-stata -b do test/fangorn/test_fangorn_basic.do
-stata -b do test/fangorn/test_fangorn_cv.do
-stata -b do test/csa/test_csadensity.do
-
-# GRF tests
-stata -b do test/grf/test_grf_basic.do
-stata -b do test/grf/test_grf_seed_reproducibility.do
+# Test suite
+stata -b do tests/run_all.do
+```
 ```
 
 ## Development
@@ -124,8 +125,31 @@ This project was developed with AI-assisted tooling:
 ## Platform Support
 
 - Linux (64-bit, GCC)
-- macOS (Intel & Apple Silicon, Clang + brew install libomp)
-- Windows (64-bit, MinGW cross-compile)
+- macOS (Intel & Apple Silicon, Clang + `brew install libomp` for OpenMP, see below for build details)
+- Windows (64-bit, MinGW-w64 cross-compile; pre-built binary in Releases)
+
+> **Note**: Pre-built binary releases include plugins for Linux and Windows only. macOS users need to build from source.
+
+### macOS Build Notes
+
+Building from source on macOS requires a few dependencies:
+
+```bash
+# Install OpenMP (not bundled with Apple Clang)
+brew install libomp
+
+# Install OpenBLAS (for BLAS-accelerated routines)
+brew install openblas
+
+# pkg-config must be able to find openblas
+export PKG_CONFIG_PATH="/opt/homebrew/opt/openblas/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+# Build
+make
+make install
+```
+
+Intel Macs may use `/usr/local` instead of `/opt/homebrew`. Adjust `PKG_CONFIG_PATH` accordingly. Once built, the plugin works on both Intel and Apple Silicon Stata versions.
 
 ## License
 

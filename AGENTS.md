@@ -1,6 +1,6 @@
 # HHStataToolkit — Agent Guide
 
-**Updated:** 2026-05-15 · **Branch:** main
+**Updated:** 2026-07-30 · **Branch:** main
 
 Stata plugin collection: kernel density (`kdensity2`), kernel regression (`nwreg`),
 random forest (`fangorn`), partially linear model via DML (`xpofangorn`),
@@ -21,8 +21,10 @@ make dist          # Package to ado/plus/ for distribution
 
 **Platform gotchas:**
 - Linux: needs `libopenblas-dev` (`pkg-config openblas` must succeed)
-- macOS: `brew install libomp` (OpenMP not bundled with Apple Clang)
-- Windows: cross-compiles with `x86_64-w64-mingw32-gcc`, static-links OpenBLAS
+- macOS: `brew install libomp` (OpenMP not bundled with Apple Clang) and `brew install openblas`. Then `export PKG_CONFIG_PATH="/opt/homebrew/opt/openblas/lib/pkgconfig:$PKG_CONFIG_PATH"` before `make`. Intel Macs use `/usr/local` instead of `/opt/homebrew`.
+- Windows: requires MinGW-w64 (`x86_64-w64-mingw32-gcc`), static-links OpenBLAS. Download the pre-built MinGW-w64 plugin from Releases, or build from source using the latest toolchain from [winlibs.com](https://winlibs.com/) (UCRT runtime recommended).
+
+**Releases**: Pre-built plugins are provided for Linux (64-bit) and Windows (64-bit) only. macOS users must build from source.
 
 **GPU is a hidden feature**: Not built by default, not exposed in ado syntax.
 Build with `make kdensity2_cuda` or `make nwreg_cuda` if needed.
@@ -49,7 +51,7 @@ nwreg/                # Single-file C plugin + ado + sthlp
 fangorn/              # Multi-file C: fangorn.c ent.c split.c utils_rf.c
 xpofangorn/           # DML partially linear model (pure Stata, calls fangorn)
 single_ado/           # Pure Stata commands (no compilation): dta2md, bprecall, csadensity, ...
-test/                 # Per-plugin subdirs; all tests are Stata .do files
+tests/                 # Per-plugin subdirs; all tests are Stata .do files
 ```
 
 ## How Plugins Work
@@ -93,15 +95,31 @@ and produces "option if not allowed".
 
 ## Testing
 
-See `test/AGENTS.md` for full test suite structure, conventions, and
+See `tests/AGENTS.md` for full test suite structure, conventions, and
 how to run timing benchmarks.
+
+### Run all tests (recommended)
+
+```bash
+stata -b do tests/run_all.do
+```
+
+### Updating run_all.do
+
+`tests/run_all.do` is the master test runner. When adding:
+- a **new test** (`.do` file) to an existing module → add a `_run_test` call
+- a **new module** → add a new section block with its tests
+
+This ensures `run_all.do` stays the single entry point for CI and
+human testers.  Group tests by module and include only non-GPU tests
+(GPU tests require special hardware and are run separately).
 
 ### Mandatory reproducibility tests (every C change)
 
 ```bash
-stata -b do test/kdensity2/test_seed_reproducibility.do
-stata -b do test/nwreg/test_seed_reproducibility.do
-stata -b do test/fangorn/test_fangorn_seed_reproducibility.do
+stata -b do tests/kdensity2/test_seed_reproducibility.do
+stata -b do tests/nwreg/test_seed_reproducibility.do
+stata -b do tests/fangorn/test_fangorn_seed_reproducibility.do
 ```
 
 ### Randomness sources
@@ -122,6 +140,48 @@ if _rc & _rc != 110 { display as error "..."; exit 111 }
 ```
 This means the plugin loading block runs on EVERY call to the ado command,
 but the second+ calls silently succeed via the rc=110 bypass.
+
+## Release
+
+### Version numbering
+
+Project-level releases use [semantic versioning](https://semver.org/) (`v0.x.x`,
+`v1.x.x`, etc.).  Each release corresponds to a git tag (e.g. `v0.1.0`).
+
+Individual `.ado` / `.sthlp` files carry their own minor versions independent of
+the project tag — bump them when the file changes, not per release.
+
+### Release notes
+
+Before each release, write a release note to `Releases/release_note_vX.Y.Z.md`
+(follow the existing `release_note_v0.1.0.md` as a template).  The release note
+should cover:
+
+- What changed: new features, bug fixes, breaking changes
+- Plugin and command status (use the existing table format)
+- Test status summary
+- Build and install instructions
+- Archive naming rules (one line summary)
+- Known limitations (if any)
+
+### Release process
+
+1. Update `version` comment in any `.ado` / `.sthlp` files that changed
+2. Write or update `Releases/release_note_vX.Y.Z.md`
+3. Build and test on each platform: `make && stata -b do tests/run_all.do`
+4. `make dist` — creates `ado/plus/` with all plugins and ado files
+5. Create distribution archives on each platform (see the release note template
+   for naming rules)
+6. `git tag -a vX.Y.Z -m "vX.Y.Z"` and push
+7. Create a GitHub Release: paste the release note as the description, upload
+   the platform-specific archives as assets
+
+### Updating release notes after a change
+
+Every code change (especially new features, new plugins, or breaking changes)
+must check whether `Releases/release_note_v0.1.0.md` (or the next planned
+release note) needs updating.  This keeps the release note draft in sync with
+the codebase.
 
 ## Key Gotchas
 
@@ -161,8 +221,8 @@ before calling them if you need previous `r()` values.
 | Pure Stata command | `single_ado/` | No compilation, just .ado + .sthlp |
 | Dataset documentation | `single_ado/dta2md.ado` | Export .dta metadata to Markdown for LLMs |
 | GPU code (hidden feature) | `kdensity2/kdensity2_cuda.cu` | Float internally, tolerance 1e-5 |
-| Reproducibility tests | `test/*/test_*_seed_reproducibility.do` | 10-run bit-identical checks |
-| Python benchmark | `test/fangorn/benchmark/` | sklearn vs fangorn |
+| Reproducibility tests | `tests/*/test_*_seed_reproducibility.do` | 10-run bit-identical checks |
+| Python benchmark | `tests/fangorn/benchmark/` | sklearn vs fangorn |
 
 ## Performance Benchmarks (16-core, Stata 18 MP)
 
@@ -170,10 +230,10 @@ Commands to reproduce timing:
 
 ```bash
 # kdensity2
-stata -b do test/kdensity2/test_cpu_reproducibility.do
+stata -b do tests/kdensity2/test_cpu_reproducibility.do
 
 # nwreg (3-variate)
-stata -b do test/nwreg/test_cpu_reproducibility.do
+stata -b do tests/nwreg/test_cpu_reproducibility.do
 
 # fangorn (n=10000, 10 features) — results from custom script
 nproc(1) 1.0-9.0s → nproc(16) 1.0s (up to 9× speedup)

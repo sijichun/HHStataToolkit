@@ -1,4 +1,4 @@
-*! version 2.2.0  07may2026
+*! version 2.3.0  30jul2026
 program define kdensity2, rclass
     version 14
     
@@ -20,6 +20,7 @@ program define kdensity2, rclass
            FOLDS(integer 10) ///
            GRIDs(integer 10) ///
            NPROC(integer 16) ///
+           GNORMalize ///
            IF(string) IN(string) ]
     
     /* Create touse marker from if/in option */
@@ -44,6 +45,7 @@ program define kdensity2, rclass
         display as error "Need at least 2 observations"
         exit 2001
     }
+    local nobs = r(N)
     
     /* Parse options */
     local kernel_opt = cond("`kernel'" == "", "gaussian", "`kernel'")
@@ -103,6 +105,26 @@ program define kdensity2, rclass
         else {
             local groupvars "`groupvars' `gv'"
         }
+    }
+    
+    /* Exclude observations with missing group values from estimation;
+       the plugin leaves their results missing */
+    if `ngroup' > 0 {
+        foreach gv in `group' {
+            quietly replace `touse' = 0 if missing(`gv')
+        }
+        quietly count if `touse'
+        if r(N) < 2 {
+            display as error "Need at least 2 observations with non-missing group values"
+            exit 2001
+        }
+        local nobs = r(N)
+    }
+    
+    /* gnormalize requires group() */
+    if "`gnormalize'" != "" & `ngroup' == 0 {
+        display as error "gnormalize requires group()"
+        exit 198
     }
     
     /* Determine dimensions */
@@ -165,9 +187,25 @@ program define kdensity2, rclass
         sort `orig_order'
     }
     
+    /* Stash results for return/display (plugin call clears r()) */
+    local plugin_rN = `nobs'
+    local plugin_rng "."
+    if `ngroup' > 0 {
+        local plugin_rng = kdensity2_ngroups
+    }
+    
+    /* gnormalize: scale each group's conditional density f(x|g) by its
+       sample share p(g) = n_g/N, so group densities sum to the mixture */
+    if "`gnormalize'" != "" {
+        tempvar gN
+        bysort `groupvars': egen `gN' = total(`touse')
+        quietly count if `touse'
+        quietly replace `gen_var' = `gen_var' * `gN' / r(N) if `touse'
+    }
+    
     /* Store results */
-    return scalar N = r(N)
-    return scalar ngroups = r(ngroups)
+    return scalar N = `plugin_rN'
+    return scalar ngroups = `plugin_rng'
     return local kernel "`kernel_opt'"
     return local bw_method "`bw_opt'"
     return local groupvars "`group'"
@@ -182,14 +220,22 @@ program define kdensity2, rclass
     }
     if `ngroup' > 0 {
         display as text "Group vars:   " as result "`group'"
-        display as text "Groups:       " as result r(ngroups)
+        display as text "Groups:       " as result `plugin_rng'
     }
-    display as text "Observations: " as result r(N)
+    if "`gnormalize'" != "" {
+        display as text "Normalized:   " as result "yes (group-share weighted)"
+    }
+    display as text "Observations: " as result `plugin_rN'
     display as text "Kernel:       " as result "`kernel_opt'"
     display as text "Bandwidth:    " as result "`bw_opt'"
     display as text "{hline 40}"
     
     /* Label variable */
-    label variable `gen_var' "Kernel density estimate"
+    if "`gnormalize'" != "" {
+        label variable `gen_var' "Group-share weighted kernel density estimate"
+    }
+    else {
+        label variable `gen_var' "Kernel density estimate"
+    }
     
 end

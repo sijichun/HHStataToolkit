@@ -101,6 +101,23 @@ The grid search proceeds as follows:
 
 For multivariate CV, all bandwidths are scaled proportionally: $\mathbf{h}_j = \mathbf{h}_0 \times \exp(j \cdot 0.05)$.
 
+### Group-Normalized Density (`gnormalize`)
+
+By default, grouped estimation yields **conditional densities** $\hat{f}(x \mid g)$: each group's estimate integrates to 1 over $x$ within the group. This is the right scale for comparing distribution shapes across groups (the same convention as official Stata `kdensity`).
+
+With the `gnormalize` option, each conditional density is multiplied by the group's sample share $p(g) = n_g / N$, yielding **mixture components**:
+
+$$
+\hat{f}(x) = \sum_g p(g) \cdot \hat{f}(x \mid g)
+$$
+
+The group curves then aggregate to (an approximation of) the overall density — the scale needed for decomposition / counterfactual analysis (e.g., DFL-style decompositions, stacked-area plots).
+
+Two caveats:
+
+- Because each group selects its own bandwidth, $\sum_g p(g)\,\hat{f}_g(x)$ is **not** numerically identical to the density estimated on the pooled sample. Equality holds only when all groups share a common bandwidth, since the KDE is linear in the data for a fixed $h$.
+- The weighting is applied in the ado layer after the plugin call; it does not affect bandwidth selection or the plugin itself. Groups skipped by `mincount()` remain missing.
+
 ---
 
 ## C Code Architecture
@@ -433,6 +450,7 @@ STDLL stata_call(int argc, char *argv[])
 - Only observations with `in_if = 1` (the `touse` variable, reflecting `if()`/`in()` conditions) are included in training and evaluation
 - `target=0` observations form the training set; `target=1` observations get density predictions but do not contribute to bandwidth estimation
 - In grouped estimation, each group uses only its own training data, producing group-specific bandwidths
+- Observations with a missing value in any group variable are excluded from estimation in the ado layer (their results remain missing)
 
 ---
 

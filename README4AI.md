@@ -27,6 +27,7 @@ kdensity2 varlist [, options]
 | `bw(method)` | `silverman`, `scott`, `cv`, or positive number | `silverman` |
 | `target(varname)` | 0/1: 0=training, 1=test | all train |
 | `group(varlist)` | Grouping variables | none |
+| `gnormalize` | Scale group densities by sample shares (mixture scale) | off |
 | `mincount(#)` | Skip groups with < # obs | 0 |
 | `generate(newvar)` | Output density variable | `kdensity2` |
 | `folds(#)` | CV folds | 10 |
@@ -43,6 +44,9 @@ kdensity2 x, bw(cv) folds(5) grids(15)
 
 * Multivariate density with grouping
 kdensity2 x y, group(g1 g2) target(t)
+
+* Group-normalized mixture density
+kdensity2 x, group(g) gnormalize
 
 * Filter
 kdensity2 x, generate(d) if(flag==1)
@@ -228,9 +232,79 @@ xpofangorn y w x1 x2 x3, debug
 
 ---
 
-## 5. Standalone Commands (`single_ado/`)
+## 5. grf — Generalized Random Forest (Causal Forest)
 
-### 5.1 csadensity — Common Support Area
+Heterogeneous treatment effect (CATE) estimation via causal forest (Athey, Tibshirani & Wager, 2019). Wraps the upstream [GRF C++ core library](https://github.com/grf-labs/grf) v2.6.1. Requires C++17 to build; pre-built plugin available in releases.
+
+```stata
+grf depvar treatvar indepvars, generate(newvar) [options]
+```
+
+**Positional**: `grf y w x1 x2` — first variable = outcome, second = treatment, rest = covariates (at least 1).
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `generate(newvar)` | CATE estimates (required) | — |
+| `yhat(varname)` | Pre-computed E[Y\|X] | internal regression forest |
+| `what(varname)` | Pre-computed E[W\|X] | internal regression forest |
+| `weights(varname)` | Sample weights | equal (1) |
+| `cluster(varname)` | Cluster IDs | unique per obs |
+| `equalizeclusterweights` | Equal-weight clusters | off |
+| `ntree(#)` | Number of trees | 2000 |
+| `samplefraction(#)` | Subsample fraction | 0.5 |
+| `mtry(#)` | Features per split | auto (√p + 20) |
+| `minnodesize(#)` | Minimum node size | 5 |
+| `nohonesty` | Disable honest splitting | off (honesty=on) |
+| `honestyfraction(#)` | Fraction for honest estimation | 0.5 |
+| `nohonestyprune` | Don't prune empty honesty leaves | off |
+| `alpha(#)` | Maximum imbalance in a split | 0.05 |
+| `imbalancepenalty(#)` | Imbalance penalty | 0 |
+| `nostabilizesplits` | Disable split stabilization | off |
+| `cigroupsize(#)` | CI group size (≥2 for variance) | 2 |
+| `vargenerate(newvar)` | Variance of CATE | off |
+| `oobgenerate(newvar)` | Out-of-bag CATE predictions | off |
+| `seed(#)` | RNG seed | 12345 |
+| `nproc(#)` | OpenMP threads | 16 |
+| `if(exp)` / `in(range)` | Observation filters | all |
+
+**Stored results**:
+```
+r(N)              → Observations
+r(ntree)          → Trees used
+r(seed)           → Seed
+r(mtry)           → Features per split
+r(ci_group_size)  → CI group size
+```
+
+**Algorithm notes**:
+- **Honest splitting** (default): split sample into two halves — one selects splits, one estimates leaf effects. Reduces overfitting; required for valid inference.
+- **R-learner orthogonalization**: nuisance forests estimate E[Y|X] and E[W|X] internally (or via `yhat()`/`what()`). Outcomes are centered before causal forest training. `yhat()` and `what()` must be provided together.
+- **Variance estimation**: "bootstrap of little bags" delta method. Activate with `vargenerate()`; requires `cigroupsize(>=2)`.
+- **OOB predictions**: unbiased CATE from trees where the observation was not in the bootstrap sample.
+- **R-vs-Stata parity**: CATE estimates correlate at **0.997** with the official R package under identical settings.
+
+```stata
+* Basic causal forest (internal nuisance)
+grf y w x1 x2 x3, generate(tauhat) ntree(500)
+
+* With variance and OOB
+grf y w x1 x2, generate(tauhat) vargenerate(vartau) oobgenerate(tau_oob) ntree(1000)
+
+* Pre-computed nuisance estimates
+grf y w x1 x2, yhat(ey) what(ew) generate(tauhat)
+
+* Cluster-robust SE
+grf y w x1, generate(tauhat) cluster(city) equalizeclusterweights
+
+* Honesty off + higher subsample fraction
+grf y w x1 x2, generate(tauhat) nohonesty samplefraction(0.8)
+```
+
+---
+
+## 6. Standalone Commands (`single_ado/`)
+
+### 6.1 csadensity — Common Support Area
 
 Detect common support between treatment and control groups via kernel density overlap.
 
@@ -256,7 +330,7 @@ csadensity x1 x2, treatment(d) generate(csa) group(g) threshold(0.15)
 csadensity x1 x2, treatment(d) generate(csa) debug
 ```
 
-### 5.2 bprecall — Binary Classification Metrics
+### 6.2 bprecall — Binary Classification Metrics
 
 Precision, recall, accuracy, F1 across multiple thresholds.
 
@@ -278,7 +352,7 @@ bprecall y yhat, divide(19)
 matrix list r(results)
 ```
 
-### 5.3 countdistinct — Count Distinct Combinations
+### 6.3 countdistinct — Count Distinct Combinations
 
 ```stata
 countdistinct varlist [if] [in] [, generate(name)]
@@ -295,7 +369,7 @@ countdistinct country year
 countdistinct country year, generate(first_obs)
 ```
 
-### 5.4 dta2md — Dataset → Markdown Export
+### 6.4 dta2md — Dataset → Markdown Export
 
 Export .dta metadata to Markdown for AI consumption.
 
@@ -322,7 +396,7 @@ dta2md "mydata.dta", descriptive labeled
 dta2md "mydata.dta", using("docs/mydata.md") descriptive
 ```
 
-### 5.5 gen_init_var — Panel Base-Year Carry-Forward
+### 6.5 gen_init_var — Panel Base-Year Carry-Forward
 
 Fill forward a variable's base-year value within groups.
 
@@ -345,7 +419,7 @@ gen_init_var gdp, yearvar(year) year(2000) by(country) generate(gdp2000)
 gen_init_var gdp, yearvar(year) year("2000") by(country) generate(gdp2000) stringyear
 ```
 
-### 5.6 gencatutility — Categorical Utility Scores
+### 6.6 gencatutility — Categorical Utility Scores
 
 Compute continuous utility scores for ordered categorical variables via inverse normal.
 
@@ -365,7 +439,7 @@ gencatutility satisfaction, generate(sat_util) display
 gencatutility education_level, generate(edu_util)
 ```
 
-### 5.7 labelvalidsample — Complete-Case Marker
+### 6.7 labelvalidsample — Complete-Case Marker
 
 Flag observations with no missing values in specified variables.
 
@@ -384,13 +458,14 @@ labelvalidsample y x1 x2, generate(complete) if(age > 18)
 
 ---
 
-## 6. Build
+## 7. Build
 
 ```bash
-make                    # Build all CPU plugins
+make                    # Build all CPU plugins (kdensity2, nwreg, fangorn, grf)
 make kdensity2          # Single plugin
 make nwreg
 make fangorn
+make grf                # Requires C++17 (gcc ≥8 or clang ≥7)
 make kdensity2_cuda     # GPU (hidden feature, needs nvcc + NVIDIA GPU)
 make nwreg_cuda
 make install            # Copy .plugin, .ado, .sthlp to ~/ado/plus/
@@ -408,7 +483,7 @@ GPU plugins use single-precision float. CPU vs GPU tolerance ~1e-5.
 
 ---
 
-## 7. Gotchas
+## 8. Gotchas
 
 1. **`if()` trap in kdensity2**: Do NOT pass `if(touse)` from a caller. Compute on all obs, filter externally.
 2. **`~` in plugin path**: `plugin using("~/...")` doesn't expand `~`. Ado uses `: env HOME` + `subinstr()`.
@@ -417,7 +492,9 @@ GPU plugins use single-precision float. CPU vs GPU tolerance ~1e-5.
 5. **`se()` + `poly()`**: Mutually exclusive. `se()` with `poly≥1` is rejected.
 6. **Multivariate `poly>1`**: Not supported (basis too large). Error raised.
 7. **String group variables**: Auto-encoded in ado layer via `egen group()`. Works transparently.
+8. **grf `yhat()`/`what()` must be paired**: Provide both or neither; providing only one raises an error.
+9. **grf C++17 build requirement**: Building from source requires a C++17 compiler. Pre-built plugin available in releases.
 
 ---
 
-*2026-05-20 · HHStataToolkit*
+*2026-07-30 · HHStataToolkit*
