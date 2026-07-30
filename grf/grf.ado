@@ -8,7 +8,7 @@ program define grf, rclass
            SAMPLEFraction(real 0.5) ///
            MTRY(integer 0) ///
            MINNodesize(integer 5) ///
-           HONesty ///
+           NOHONesty ///
            HONestyfraction(real 0.5) ///
            NOHONestyprune ///
            ALPHA(real 0.05) ///
@@ -112,6 +112,20 @@ program define grf, rclass
         }
     }
 
+    /* Locate and load plugin early (also needed for internal nuisance forests) */
+    local plugin_path "grf/grf.plugin"
+    capture findfile grf.plugin
+    if _rc capture findfile g/grf.plugin
+    if _rc capture findfile grf/grf.plugin
+    if !_rc local plugin_path "`r(fn)'"
+    local homedir : env HOME
+    local plugin_path = subinstr("`plugin_path'", "~", "`homedir'", .)
+    capture program _grf_plugin, plugin using("`plugin_path'")
+    if _rc & _rc != 110 {
+        display as error "Failed to load GRF plugin"
+        exit _rc
+    }
+
     /* Handle yhat/what: internal nuisance if not provided */
     local yhat_var ""
     local what_var ""
@@ -121,22 +135,56 @@ program define grf, rclass
         local what_var "`what'"
     }
     else {
-        /* Internal regression forest for nuisance */
-        local nuisance_seed = `seed' + 99999
+        /* Internal regression forests for nuisance estimates */
+        local nuisance_seed = `seed'
         local nuisance_ntree = max(50, `ntree' / 4)
         quietly generate double `yhat_internal' = .
         quietly generate double `what_internal' = .
 
+        /* The C++ regression trainer still expects the full variable layout
+           (features, y, w, yhat, what, weights, cluster, generate, vargen, oobgen, touse).
+           Create dummy columns for the fields that are not used in the nuisance fit. */
+        tempvar w_dummy yhat_dummy what_dummy weight_dummy cluster_dummy vargen_dummy oobgen_dummy
+        quietly generate double `w_dummy' = 0
+        quietly generate double `yhat_dummy' = 0
+        quietly generate double `what_dummy' = 0
+        quietly generate double `weight_dummy' = 1
+        quietly generate long   `cluster_dummy' = _n
+        quietly generate double `vargen_dummy' = .
+        quietly generate double `oobgen_dummy' = .
+
+        local nuisance_layout "`xvars' `y' `w_dummy' `yhat_dummy' `what_dummy' `weight_dummy' `cluster_dummy' `yhat_internal' `vargen_dummy' `oobgen_dummy' `touse'"
+
+        /* Nuisance forest options matching R args.orthog:
+           ci.group.size=1, min.node.size=5, honesty=TRUE/fixed-fraction,
+           user params passed through for sample.fraction/mtry/alpha/imbalance.penalty */
+        local nuisance_opts "ntree(`nuisance_ntree') seed(`nuisance_seed') nproc(`nproc')"
+        local nuisance_opts "`nuisance_opts' nfeatures(`nx')"
+        local nuisance_opts "`nuisance_opts' cigroupsize(1) minnodesize(5)"
+        local nuisance_opts "`nuisance_opts' samplefraction(`samplefraction') mtry(`mtry')"
+        local nuisance_opts "`nuisance_opts' alpha(`alpha') imbalancepenalty(`imbalancepenalty')"
+        local nuisance_opts "`nuisance_opts' honesty(1) honestyfraction(0.5)"
+        if "`nohonestyprune'" != "" {
+            local nuisance_opts "`nuisance_opts' honestyprune(0)"
+        }
+        else {
+            local nuisance_opts "`nuisance_opts' honestyprune(1)"
+        }
+
         * Fit Y ~ X
-        local nuisance_vars "`xvars' `y' `yhat_internal' `touse'"
-        capture plugin call _grf_plugin `nuisance_vars', ///
-            ntree(`nuisance_ntree') seed(`nuisance_seed') nproc(`nproc') ///
-            nfeatures(`nx')
+        capture plugin call _grf_plugin `nuisance_layout', `nuisance_opts'
+        if _rc {
+            display as error "Internal Y nuisance forest failed"
+            exit _rc
+        }
+
         * Fit W ~ X
-        local nuisance_vars_w "`xvars' `w' `what_internal' `touse'"
-        capture plugin call _grf_plugin `nuisance_vars_w', ///
-            ntree(`nuisance_ntree') seed(`nuisance_seed') nproc(`nproc') ///
-            nfeatures(`nx')
+        local nuisance_layout_w "`xvars' `w' `w_dummy' `yhat_dummy' `what_dummy' `weight_dummy' `cluster_dummy' `what_internal' `vargen_dummy' `oobgen_dummy' `touse'"
+        capture plugin call _grf_plugin `nuisance_layout_w', `nuisance_opts'
+        if _rc {
+            display as error "Internal W nuisance forest failed"
+            exit _rc
+        }
 
         local yhat_var "`yhat_internal'"
         local what_var "`what_internal'"
@@ -169,16 +217,10 @@ program define grf, rclass
         quietly generate long `cluster_var' = _n
     }
 
-    /* Center Y and W using yhat/what (for causal path) */
+    /* Center Y and W using the nuisance/provided yhat/what (for causal path) */
     tempvar y_centered w_centered
-    if `has_yhat' {
-        quietly generate double `y_centered' = `y' - `yhat_var'
-        quietly generate double `w_centered' = `w' - `what_var'
-    }
-    else {
-        quietly generate double `y_centered' = `y'
-        quietly generate double `w_centered' = `w'
-    }
+    quietly generate double `y_centered' = `y' - `yhat_var'
+    quietly generate double `w_centered' = `w' - `what_var'
 
     /* Build plugin_vars: features -> y_centered -> w_centered -> yhat -> what -> weights -> cluster -> generate -> [vargen] -> [oobgen] -> touse */
     local plugin_vars "`xvars' `y_centered' `w_centered'"
@@ -217,31 +259,17 @@ program define grf, rclass
     * touse: nx+10
     local n_total = `nx' + 10
 
-    /* Locate and load plugin */
-    local plugin_path "grf/grf.plugin"
-    capture findfile grf.plugin
-    if _rc capture findfile g/grf.plugin
-    if _rc capture findfile grf/grf.plugin
-    if !_rc local plugin_path "`r(fn)'"
-    local homedir : env HOME
-    local plugin_path = subinstr("`plugin_path'", "~", "`homedir'", .)
-    capture program _grf_plugin, plugin using("`plugin_path'")
-    if _rc & _rc != 110 {
-        display as error "Failed to load GRF plugin"
-        exit _rc
-    }
-
     /* Build plugin arguments */
     local plugin_args "ntree(`ntree') seed(`seed') nproc(`nproc')"
     local plugin_args "`plugin_args' nfeatures(`nx')"
     local plugin_args "`plugin_args' samplefraction(`samplefraction')"
     local plugin_args "`plugin_args' mtry(`mtry')"
     local plugin_args "`plugin_args' minnodesize(`minnodesize')"
-    if "`honesty'" != "" {
-        local plugin_args "`plugin_args' honesty(1)"
+    if "`nohonesty'" != "" {
+        local plugin_args "`plugin_args' honesty(0)"
     }
     else {
-        local plugin_args "`plugin_args' honesty(0)"
+        local plugin_args "`plugin_args' honesty(1)"
     }
     local plugin_args "`plugin_args' honestyfraction(`honestyfraction')"
     if "`nohonestyprune'" != "" {

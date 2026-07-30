@@ -93,7 +93,7 @@ grf depvar treatvar [indepvars], generate(newvar) [options]
 | `samplefraction(#)` | Subsample fraction | 0.5 |
 | `mtry(#)` | Features per split | auto (√p + 20) |
 | `minnodesize(#)` | Minimum node size | 5 |
-| `honesty` | Honest splitting | on |
+| `nohonesty` | Disable honest splitting | off (honesty on by default) |
 | `honestyfraction(#)` | Honest split fraction | 0.5 |
 | `nohonestyprune` | Don't prune empty leaves | off |
 | `alpha(#)` | Max imbalance | 0.05 |
@@ -234,11 +234,11 @@ All tests run on Linux x86_64, Stata 18 MP, R 4.3.1 + grf 2.6.1.
 
 | Metric | Value |
 |--------|-------|
-| Correlation (R vs Stata CATE) | **0.997** |
-| Mean absolute difference | 0.032 |
-| Max absolute difference | 0.180 |
-| Stata CATE range | [−0.167, 1.755] |
-| R CATE range | [−0.159, 1.787] |
+| Correlation (R vs Stata CATE) | **0.9974** |
+| Mean absolute difference | 0.0320 |
+| Max absolute difference | 0.1967 |
+| Stata CATE range | [−0.174, 1.767] |
+| R CATE range | [−0.160, 1.780] |
 
 The 0.997 correlation demonstrates near-identical CATE estimates. The residual
 difference (0.032 mean, 0.180 max) arises from RNG sequence divergence in

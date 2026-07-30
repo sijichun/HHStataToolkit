@@ -12,5 +12,8 @@ quietly sum w
 gen what = r(mean)
 
 capture noisily grf y w x1, generate(p1) ntree(50) nproc(2) seed(12345) yhat(yhat) what(what) cigroupsize(2) vargenerate(v1)
-if _rc { display as error "FAILED variance"; exit _rc }
+if _rc {
+    display as error "FAILED variance"
+    exit _rc
+}
 display "PASSED"

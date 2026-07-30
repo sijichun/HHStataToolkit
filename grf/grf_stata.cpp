@@ -120,7 +120,7 @@ static bool run_regression(int, char**, const GrfOptions& opts, int* m,
     if (!build_training_data(n_total, opts.nfeatures+6, m[10], m[1], m[2], -1, -1, err, d, rm)) return false;
     auto fo = build_forest_options(opts, ec, opts.nfeatures);
     auto f = grf::regression_trainer().train(*d, fo);
-    auto p = grf::regression_predictor(static_cast<uint>(opts.num_threads));
+    auto p = grf::regression_predictor(static_cast<grf::uint>(opts.num_threads));
     auto preds = p.predict(f, *d, *d, false);
     if (!write_predictions_to_stata(preds, rm, m[7], n_obs, err)) { free_training_data(d); return false; }
     SF_scal_save((char*)"N", static_cast<ST_double>(n_obs));
@@ -144,7 +144,7 @@ static bool run_causal(int, char**, const GrfOptions& opts, int* m,
 
     auto fo = build_forest_options(opts, ec, opts.nfeatures);
     auto f = grf::instrumental_trainer(0, opts.stabilize_splits).train(*d, fo);
-    auto preds = grf::instrumental_predictor(static_cast<uint>(opts.num_threads))
+    auto preds = grf::instrumental_predictor(static_cast<grf::uint>(opts.num_threads))
                      .predict(f, *d, *d, opts.estimate_variance);
 
     if (!write_predictions_to_stata(preds, rm, m[7], n_obs, err)) { free_training_data(d); return false; }

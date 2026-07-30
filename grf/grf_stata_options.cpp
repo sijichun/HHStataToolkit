@@ -92,22 +92,22 @@ grf::ForestOptions build_forest_options(const GrfOptions& opts, const std::vecto
 {
     // Apply R default mtry formula when mtry=0:
     //   mtry = min(ceil(sqrt(p) + 20), p)  where p = number of features
-    uint mtry = static_cast<uint>(opts.mtry);
+    grf::uint mtry = static_cast<grf::uint>(opts.mtry);
     if (mtry == 0 && nfeatures > 0) {
-        mtry = static_cast<uint>(std::min(
+        mtry = static_cast<grf::uint>(std::min(
             static_cast<int>(std::ceil(std::sqrt(static_cast<double>(nfeatures)) + 20.0)),
             nfeatures));
     }
 
     return grf::ForestOptions(
-        static_cast<uint>(opts.num_trees),
+        static_cast<grf::uint>(opts.num_trees),
         static_cast<size_t>(opts.ci_group_size),
         opts.sample_fraction,
         mtry,
-        static_cast<uint>(opts.min_node_size),
+        static_cast<grf::uint>(opts.min_node_size),
         opts.honesty, opts.honesty_fraction, opts.honesty_prune_leaves,
         opts.alpha, opts.imbalance_penalty,
-        static_cast<uint>(opts.num_threads),
-        static_cast<uint>(opts.seed),
+        static_cast<grf::uint>(opts.num_threads),
+        static_cast<grf::uint>(opts.seed),
         opts.legacy_seed, clusters, 0);
 }

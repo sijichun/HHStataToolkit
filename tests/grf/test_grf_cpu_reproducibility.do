@@ -16,5 +16,9 @@ quietly grf y w x1, generate(p_s) ntree(50) nproc(1) seed(999) yhat(yhat) what(w
 quietly grf y w x1, generate(p_m) ntree(50) nproc(4) seed(999) yhat(yhat) what(what)
 quietly gen double d = abs(p_s - p_m)
 quietly sum d
-if r(max) < 1e-10 { display "PASSED: bit-identical" }
-else { display "PASSED: differences exist (expected)" }
+if r(max) < 1e-10 {
+    display "PASSED: bit-identical"
+}
+else {
+    display "PASSED: differences exist (expected)"
+}

@@ -12,7 +12,13 @@ quietly sum w
 gen what = r(mean)
 
 capture noisily grf y w x1, generate(p1) ntree(50) nproc(2) seed(12345) yhat(yhat) what(what) oobgenerate(oob1)
-if _rc { display as error "FAILED oob"; exit _rc }
+if _rc {
+    display as error "FAILED oob"
+    exit _rc
+}
 capture noisily confirm variable oob1
-if _rc { display as error "FAILED oob not created"; exit _rc }
+if _rc {
+    display as error "FAILED oob not created"
+    exit _rc
+}
 display "PASSED"

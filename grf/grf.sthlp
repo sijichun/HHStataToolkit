@@ -9,7 +9,7 @@
     [{opt yhat(varname)} {opt what(varname)} 
     {opt weights(varname)} {opt cluster(varname)} {opt equalizeclusterweights}
     {opt ntree(#)} {opt samplefraction(#)} {opt mtry(#)} 
-    {opt minnodesize(#)} {opt honesty} {opt honestyfraction(#)} 
+    {opt minnodesize(#)} {opt nohonesty} {opt honestyfraction(#)} 
     {opt nohonestyprune} {opt alpha(#)} {opt imbalancepenalty(#)} 
     {opt nostabilizesplits} {opt cigroupsize(#)} 
     {opt vargenerate(newvar)} {opt oobgenerate(newvar)} 
@@ -38,9 +38,12 @@ internal regression forests.
 {opt samplefraction(#)} specifies subsample fraction (default 0.5).
 {opt mtry(#)} specifies features per split (0=auto, default 0).
 {opt minnodesize(#)} specifies minimum node size (default 5).
-{opt honesty} enables honest splitting (default on).
+{opt nohonesty} disables honest splitting (honesty is on by default).
 {opt honestyfraction(#)} specifies honesty fraction (default 0.5).
+{opt nohonestyprune} disables pruning empty honesty leaves.
 {opt alpha(#)} controls maximum imbalance (default 0.05).
+{opt imbalancepenalty(#)} specifies imbalance penalty (default 0).
+{opt nostabilizesplits} disables split stabilization.
 {opt cigroupsize(#)} sets CI group size (default 2, min 2 for variance).
 
 {opt cluster(varname)} specifies cluster IDs.

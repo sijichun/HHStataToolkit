@@ -15,15 +15,27 @@ gen what = r(mean)
 
 * Run GRF
 capture noisily grf y w x1, generate(p) ntree(50) nproc(2) seed(12345) yhat(yhat) what(what)
-if _rc { display as error "FAILED: grf rc=" _rc; exit _rc }
+if _rc {
+    display as error "FAILED: grf rc=" _rc
+    exit _rc
+}
 
 capture noisily confirm variable p
-if _rc { display as error "FAILED: output p not created"; exit _rc }
+if _rc {
+    display as error "FAILED: output p not created"
+    exit _rc
+}
 
 capture noisily assert p != .
-if _rc { display as error "FAILED: missing values in p"; exit _rc }
+if _rc {
+    display as error "FAILED: missing values in p"
+    exit _rc
+}
 
 corr y p
 local rho = r(rho)
-if abs(`rho') < 0.3 { display as error "FAILED: low correlation"; exit _rc }
+if abs(`rho') < 0.3 {
+    display as error "FAILED: low correlation"
+    exit _rc
+}
 display "PASSED: grf basic smoke (corr = " %6.4f `rho' ")"

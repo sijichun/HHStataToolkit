@@ -21,14 +21,21 @@ cf <- causal_forest(X, Y, W, tune.parameters = "none",
 tau_oob <- predict(cf)$predictions
 tau_test <- predict(cf, X.test)$predictions
 
+# Extract nuisance estimates (R internally computes Y.hat, W.hat)
+Y_hat <- cf$Y.hat
+W_hat <- cf$W.hat
+
+# Pad test predictions to match training length for a rectangular CSV output.
+tau_test_padded <- c(tau_test, rep(NA, length(tau_oob) - length(tau_test)))
+
 write.csv(data.frame(id = 1:length(tau_oob),
                      tau_oob = tau_oob,
-                     tau_test = tau_test),
+                     tau_test = tau_test_padded),
           file = file.path(output_dir, "parity_readme1.csv"),
           row.names = FALSE)
 
-# Save the training data for Stata to import
-train_data <- data.frame(id = 1:n, X, Y, W)
+# Save the training data for Stata to import (including R nuisance estimates)
+train_data <- data.frame(id = 1:n, X, Y, W, Y_hat = Y_hat, W_hat = W_hat)
 write.csv(train_data,
           file = file.path(output_dir, "parity_readme1_data.csv"),
           row.names = FALSE)
